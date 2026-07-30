@@ -1,0 +1,351 @@
+definitions:
+  github_com_cloudstorex_backend_internal_shared_response.APIError:
+    properties:
+      code:
+        type: string
+      message:
+        type: string
+    type: object
+  github_com_cloudstorex_backend_internal_shared_response.APIResponse:
+    properties:
+      data: {}
+      error:
+        $ref: '#/definitions/github_com_cloudstorex_backend_internal_shared_response.APIError'
+      success:
+        type: boolean
+    type: object
+  internal_storage.BucketDTO:
+    properties:
+      created_at:
+        type: string
+      name:
+        type: string
+    type: object
+  internal_storage.CreateBucketRequest:
+    properties:
+      bucket:
+        type: string
+    required:
+    - bucket
+    type: object
+  internal_storage.ObjectDTO:
+    properties:
+      bucket:
+        type: string
+      content_type:
+        type: string
+      etag:
+        type: string
+      key:
+        type: string
+      last_modified:
+        type: string
+      metadata:
+        additionalProperties:
+          type: string
+        type: object
+      size:
+        type: integer
+    type: object
+  internal_storage.UploadResponseDTO:
+    properties:
+      bucket:
+        type: string
+      etag:
+        type: string
+      key:
+        type: string
+      size:
+        type: integer
+    type: object
+info:
+  contact: {}
+paths:
+  /api/v1/storage/buckets:
+    get:
+      description: Retrieves all buckets available in the current workspace
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/internal_storage.BucketDTO'
+            type: array
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/github_com_cloudstorex_backend_internal_shared_response.APIResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/github_com_cloudstorex_backend_internal_shared_response.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: List storage buckets
+      tags:
+      - buckets
+    post:
+      consumes:
+      - application/json
+      description: Creates a new bucket in the configured default storage provider
+      parameters:
+      - description: Bucket creation request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/internal_storage.CreateBucketRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/internal_storage.BucketDTO'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/github_com_cloudstorex_backend_internal_shared_response.APIResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/github_com_cloudstorex_backend_internal_shared_response.APIResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/github_com_cloudstorex_backend_internal_shared_response.APIResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/github_com_cloudstorex_backend_internal_shared_response.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Create a storage bucket
+      tags:
+      - buckets
+  /api/v1/storage/buckets/{bucket}:
+    delete:
+      description: Deletes an empty storage bucket
+      parameters:
+      - description: Bucket name
+        in: path
+        name: bucket
+        required: true
+        type: string
+      responses:
+        "204":
+          description: No Content
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/github_com_cloudstorex_backend_internal_shared_response.APIResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/github_com_cloudstorex_backend_internal_shared_response.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/github_com_cloudstorex_backend_internal_shared_response.APIResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/github_com_cloudstorex_backend_internal_shared_response.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Delete a storage bucket
+      tags:
+      - buckets
+  /api/v1/storage/buckets/{bucket}/objects:
+    get:
+      description: Retrieves a list of objects in a bucket, optionally filtered by
+        prefix
+      parameters:
+      - description: Bucket name
+        in: path
+        name: bucket
+        required: true
+        type: string
+      - description: Key prefix filter
+        in: query
+        name: prefix
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/internal_storage.ObjectDTO'
+            type: array
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/github_com_cloudstorex_backend_internal_shared_response.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/github_com_cloudstorex_backend_internal_shared_response.APIResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/github_com_cloudstorex_backend_internal_shared_response.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: List objects in a bucket
+      tags:
+      - objects
+    post:
+      consumes:
+      - multipart/form-data
+      description: Uploads a file to the specified bucket using multipart/form-data
+        streaming
+      parameters:
+      - description: Bucket name
+        in: path
+        name: bucket
+        required: true
+        type: string
+      - description: Object key (optional, defaults to uploaded filename)
+        in: query
+        name: key
+        type: string
+      - description: File to upload
+        in: formData
+        name: file
+        required: true
+        type: file
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/internal_storage.UploadResponseDTO'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/github_com_cloudstorex_backend_internal_shared_response.APIResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/github_com_cloudstorex_backend_internal_shared_response.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/github_com_cloudstorex_backend_internal_shared_response.APIResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/github_com_cloudstorex_backend_internal_shared_response.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Stream upload an object
+      tags:
+      - objects
+  /api/v1/storage/buckets/{bucket}/objects/{key}:
+    delete:
+      description: Deletes an object from the storage bucket
+      parameters:
+      - description: Bucket name
+        in: path
+        name: bucket
+        required: true
+        type: string
+      - description: Object key
+        in: path
+        name: key
+        required: true
+        type: string
+      responses:
+        "204":
+          description: No Content
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/github_com_cloudstorex_backend_internal_shared_response.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/github_com_cloudstorex_backend_internal_shared_response.APIResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/github_com_cloudstorex_backend_internal_shared_response.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Delete an object
+      tags:
+      - objects
+    get:
+      description: Streams an object's contents from the storage provider
+      parameters:
+      - description: Bucket name
+        in: path
+        name: bucket
+        required: true
+        type: string
+      - description: Object key
+        in: path
+        name: key
+        required: true
+        type: string
+      produces:
+      - application/octet-stream
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: file
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/github_com_cloudstorex_backend_internal_shared_response.APIResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/github_com_cloudstorex_backend_internal_shared_response.APIResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/github_com_cloudstorex_backend_internal_shared_response.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Stream download an object
+      tags:
+      - objects
+    head:
+      description: Returns HTTP 200 if the object exists in the bucket, 404 otherwise
+      parameters:
+      - description: Bucket name
+        in: path
+        name: bucket
+        required: true
+        type: string
+      - description: Object key
+        in: path
+        name: key
+        required: true
+        type: string
+      responses:
+        "200":
+          description: OK
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/github_com_cloudstorex_backend_internal_shared_response.APIResponse'
+        "404":
+          description: Not Found
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/github_com_cloudstorex_backend_internal_shared_response.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Check if an object exists
+      tags:
+      - objects
+swagger: "2.0"

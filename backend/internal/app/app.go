@@ -22,7 +22,7 @@ import (
 	"github.com/cloudstorex/backend/internal/shared/response"
 	"github.com/cloudstorex/backend/internal/storage"
 	"github.com/gin-gonic/gin"
-	"github.com/redis/go-redis/v9"
+	redis "github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 )
 

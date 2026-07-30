@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/cloudstorex/backend/internal/config"
-	"github.com/redis/go-redis/v9"
+	redis "github.com/redis/go-redis/v9"
 )
 
 func NewRedisClient(cfg *config.Config) (*redis.Client, error) {

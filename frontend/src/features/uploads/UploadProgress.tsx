@@ -12,7 +12,7 @@ import {
   UploadCloud,
   Ban,
 } from "lucide-react";
-import { Button } from "@/components/ui/button";
+
 
 export function UploadProgress() {
   const queue = useUploadStore((state) => state.queue);
@@ -26,9 +26,7 @@ export function UploadProgress() {
     (item) => item.status === "uploading" || item.status === "pending"
   );
   const completedCount = queue.filter((item) => item.status === "completed").length;
-  const errorCount = queue.filter(
-    (item) => item.status === "error" || item.status === "cancelled"
-  ).length;
+
 
   return (
     <div className="fixed bottom-4 right-4 z-50 w-80 sm:w-96 rounded-xl bg-card border shadow-xl overflow-hidden animate-slide-up">

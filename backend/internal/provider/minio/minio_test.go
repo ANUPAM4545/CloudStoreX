@@ -10,7 +10,10 @@ import (
 	"testing"
 
 
+	"github.com/cloudstorex/backend/internal/metadata/dto"
+	"github.com/cloudstorex/backend/internal/metadata/model"
 	"github.com/cloudstorex/backend/internal/policy"
+	"github.com/google/uuid"
 	"github.com/cloudstorex/backend/internal/provider"
 	"github.com/cloudstorex/backend/internal/storage"
 	minio "github.com/minio/minio-go/v7"
@@ -168,6 +171,57 @@ func TestMinIOProvider_ErrorTranslation(t *testing.T) {
 	}
 }
 
+// dummyMetadataService implements service.MetadataService for testing
+type dummyMetadataService struct {
+	objects map[string]bool
+}
+
+func (d *dummyMetadataService) CreateObjectMetadata(ctx context.Context, bucketID uuid.UUID, objectKey, providerObjectKey string, size int64, mimeType, etag, providerID string, ownerID *uuid.UUID, tags map[string]string, meta map[string]string) (*model.Object, error) {
+	if d.objects == nil {
+		d.objects = make(map[string]bool)
+	}
+	d.objects[objectKey] = true
+	return &model.Object{ID: uuid.New(), ObjectKey: objectKey}, nil
+}
+func (d *dummyMetadataService) UpdateObjectMetadata(ctx context.Context, id string, mimeType string, storageClass string, tags map[string]string, custom map[string]string) (*model.Object, error) { return nil, nil }
+func (d *dummyMetadataService) FindObjectByKey(ctx context.Context, bucketID, objectKey string) (*model.Object, error) {
+	if d.objects != nil && d.objects[objectKey] {
+		return &model.Object{ID: uuid.New(), ObjectKey: objectKey}, nil
+	}
+	return nil, errors.New("not found")
+}
+func (d *dummyMetadataService) FindObjectByID(ctx context.Context, id string) (*model.Object, error) { return nil, nil }
+func (d *dummyMetadataService) GetObjectMetadata(ctx context.Context, id string) (map[string]string, error) { return nil, nil }
+func (d *dummyMetadataService) SearchObjects(ctx context.Context, query dto.SearchQuery) ([]dto.ObjectMetaDTO, int64, error) {
+	var res []dto.ObjectMetaDTO
+	for k, v := range d.objects {
+		if v {
+			res = append(res, dto.ObjectMetaDTO{ObjectKey: k})
+		}
+	}
+	return res, int64(len(res)), nil
+}
+func (d *dummyMetadataService) TagObject(ctx context.Context, id string, tags map[string]string) error { return nil }
+func (d *dummyMetadataService) UntagObject(ctx context.Context, id string, keys []string) error { return nil }
+func (d *dummyMetadataService) SoftDeleteObject(ctx context.Context, id string) error {
+	// For testing, just clear everything
+	d.objects = make(map[string]bool)
+	return nil
+}
+func (d *dummyMetadataService) RestoreObject(ctx context.Context, id string) error { return nil }
+func (d *dummyMetadataService) CreateBucket(ctx context.Context, workspaceID uuid.UUID, providerID, name, region string) (*model.Bucket, error) { return nil, nil }
+func (d *dummyMetadataService) FindBucketByName(ctx context.Context, workspaceID, bucketName string) (*model.Bucket, error) { return &model.Bucket{ID: uuid.New(), Name: bucketName}, nil }
+func (d *dummyMetadataService) DeleteBucket(ctx context.Context, workspaceID, bucketName string) error { return nil }
+func (d *dummyMetadataService) ListBuckets(ctx context.Context, workspaceID string) ([]model.Bucket, error) { return nil, nil }
+
+type mockResolver struct {
+	id string
+}
+
+func (m mockResolver) GetDefaultProviderID(ctx context.Context, workspaceID string) (string, error) {
+	return m.id, nil
+}
+
 func TestMinIOProvider_EndToEndPipelineIntegration(t *testing.T) {
 	// 1. Setup MinIO Provider with Mock MinIOClient
 	mockClient := newMockMinIOClient()
@@ -185,13 +239,13 @@ func TestMinIOProvider_EndToEndPipelineIntegration(t *testing.T) {
 	}
 
 	// 3. Configure Policy Evaluator to route to "minio"
-	evaluator := policy.NewDefaultEvaluator("minio")
+	evaluator := policy.NewDefaultEvaluator(mockResolver{id: "minio"})
 
 	// 4. Instantiate central Storage Router
 	router := storage.NewRouter(registry, evaluator)
 
 	// 5. Instantiate high-level Storage Service
-	service := storage.NewService(router)
+	service := storage.NewService(router, &dummyMetadataService{})
 
 	ctx := context.Background()
 

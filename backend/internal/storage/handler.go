@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cloudstorex/backend/internal/metadata/dto"
 	"github.com/cloudstorex/backend/internal/shared/response"
 	"github.com/cloudstorex/backend/internal/storage/validator"
 	"github.com/gin-gonic/gin"
@@ -439,4 +440,163 @@ func (h *Handler) ObjectExists(c *gin.Context) {
 	}
 
 	c.Status(http.StatusOK)
+}
+
+// SearchObjects godoc
+// @Summary Search objects
+// @Description Searches across buckets based on metadata, tags, and standard object fields
+// @Tags search
+// @Produce json
+// @Security BearerAuth
+// @Param prefix query string false "Key prefix filter"
+// @Param mime_type query string false "Mime type filter"
+// @Param storage_class query string false "Storage class filter"
+// @Param status query string false "Status filter"
+// @Param tags query string false "Comma separated tags in format key=value"
+// @Success 200 {array} dto.ObjectMetaDTO
+// @Failure 401 {object} response.APIResponse
+// @Failure 500 {object} response.APIResponse
+// @Router /api/v1/storage/search [get]
+func (h *Handler) SearchObjects(c *gin.Context) {
+	setResponseHeaders(c)
+	
+	// Assuming dto is imported. I need to ensure it's imported.
+	query := c.Request.URL.Query()
+	
+	searchQuery := dto.SearchQuery{
+		WorkspaceID:  GetContextValue(c.Request.Context(), CtxKeyWorkspaceID),
+		Prefix:       query.Get("prefix"),
+		MimeType:     query.Get("mime_type"),
+		StorageClass: query.Get("storage_class"),
+		Status:       query.Get("status"),
+		Limit:        1000,
+	}
+	
+	if tags := query.Get("tags"); tags != "" {
+		tagPairs := strings.Split(tags, ",")
+		tagMap := make(map[string]string)
+		for _, pair := range tagPairs {
+			kv := strings.SplitN(pair, "=", 2)
+			if len(kv) == 2 {
+				tagMap[kv[0]] = kv[1]
+			}
+		}
+		searchQuery.Tags = tagMap
+	}
+
+	res, _, err := h.service.SearchObjects(c.Request.Context(), searchQuery)
+	if err != nil {
+		h.handleStorageError(c, err)
+		return
+	}
+
+	response.Success(c, http.StatusOK, res)
+}
+
+// GetObjectByID godoc
+// @Summary Get object metadata by ID
+// @Description Retrieves object details using its global UUID
+// @Tags search
+// @Produce json
+// @Security BearerAuth
+// @Param id path string true "Object UUID"
+// @Success 200 {object} dto.ObjectMetaDTO
+// @Failure 401 {object} response.APIResponse
+// @Failure 404 {object} response.APIResponse
+// @Failure 500 {object} response.APIResponse
+// @Router /api/v1/storage/objects/{id} [get]
+func (h *Handler) GetObjectByID(c *gin.Context) {
+	setResponseHeaders(c)
+	id := c.Param("id")
+	
+	obj, err := h.service.GetObjectByID(c.Request.Context(), id)
+	if err != nil {
+		h.handleStorageError(c, err)
+		return
+	}
+	
+	response.Success(c, http.StatusOK, obj)
+}
+
+// GetObjectMetadata godoc
+// @Summary Get object custom metadata
+// @Description Retrieves just the custom metadata map for an object
+// @Tags metadata
+// @Produce json
+// @Security BearerAuth
+// @Param id path string true "Object UUID"
+// @Success 200 {object} map[string]string
+// @Failure 401 {object} response.APIResponse
+// @Failure 404 {object} response.APIResponse
+// @Failure 500 {object} response.APIResponse
+// @Router /api/v1/storage/objects/{id}/metadata [get]
+func (h *Handler) GetObjectMetadata(c *gin.Context) {
+	setResponseHeaders(c)
+	id := c.Param("id")
+	
+	meta, err := h.service.GetObjectMetadata(c.Request.Context(), id)
+	if err != nil {
+		h.handleStorageError(c, err)
+		return
+	}
+	
+	response.Success(c, http.StatusOK, meta)
+}
+
+// TagObject godoc
+// @Summary Add tags to an object
+// @Description Adds or updates key-value tags for a specific object
+// @Tags metadata
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param id path string true "Object UUID"
+// @Param tags body map[string]string true "Tags to add/update"
+// @Success 200 "OK"
+// @Failure 400 {object} response.APIResponse
+// @Failure 401 {object} response.APIResponse
+// @Failure 404 {object} response.APIResponse
+// @Failure 500 {object} response.APIResponse
+// @Router /api/v1/storage/objects/{id}/tags [post]
+func (h *Handler) TagObject(c *gin.Context) {
+	setResponseHeaders(c)
+	id := c.Param("id")
+	
+	var tags map[string]string
+	if err := c.ShouldBindJSON(&tags); err != nil {
+		response.Error(c, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	
+	if err := h.service.TagObject(c.Request.Context(), id, tags); err != nil {
+		h.handleStorageError(c, err)
+		return
+	}
+	
+	response.Success(c, http.StatusOK, gin.H{"status": "tagged"})
+}
+
+// UntagObject godoc
+// @Summary Remove a tag from an object
+// @Description Removes a specific tag key from an object
+// @Tags metadata
+// @Security BearerAuth
+// @Param id path string true "Object UUID"
+// @Param key path string true "Tag key to remove"
+// @Success 204 "No Content"
+// @Failure 401 {object} response.APIResponse
+// @Failure 404 {object} response.APIResponse
+// @Failure 500 {object} response.APIResponse
+// @Router /api/v1/storage/objects/{id}/tags/{key} [delete]
+func (h *Handler) UntagObject(c *gin.Context) {
+	setResponseHeaders(c)
+	id := c.Param("id")
+	key := c.Param("key")
+	
+	if err := h.service.UntagObject(c.Request.Context(), id, []string{key}); err != nil {
+		h.handleStorageError(c, err)
+		return
+	}
+	
+	c.Status(http.StatusNoContent)
 }

@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cloudstorex/backend/internal/metadata/dto"
 	"github.com/cloudstorex/backend/internal/shared/response"
 	"github.com/gin-gonic/gin"
 )
@@ -102,6 +103,26 @@ func (m *mockService) ListBuckets(ctx context.Context) ([]*Bucket, error) {
 
 func (m *mockService) GeneratePresignedURL(ctx context.Context, bucket, key string, expiration time.Duration) (string, error) {
 	return "http://presigned-url/" + bucket + "/" + key, nil
+}
+
+func (m *mockService) SearchObjects(ctx context.Context, query dto.SearchQuery) ([]dto.ObjectMetaDTO, int64, error) {
+	return nil, 0, nil
+}
+
+func (m *mockService) GetObjectByID(ctx context.Context, id string) (*dto.ObjectMetaDTO, error) {
+	return nil, nil
+}
+
+func (m *mockService) GetObjectMetadata(ctx context.Context, id string) (map[string]string, error) {
+	return nil, nil
+}
+
+func (m *mockService) TagObject(ctx context.Context, id string, tags map[string]string) error {
+	return nil
+}
+
+func (m *mockService) UntagObject(ctx context.Context, id string, keys []string) error {
+	return nil
 }
 
 func setupTestRouter(handler *Handler) *gin.Engine {

@@ -101,8 +101,16 @@ func (m *mockProvider) ListObjectVersions(ctx context.Context, bucket, key strin
 	return nil, nil
 }
 
+type mockResolver struct {
+	id string
+}
+
+func (m mockResolver) GetDefaultProviderID(ctx context.Context, workspaceID string) (string, error) {
+	return m.id, nil
+}
+
 func TestRouter_Upload(t *testing.T) {
-	evaluator := policy.NewDefaultEvaluator("test-provider")
+	evaluator := policy.NewDefaultEvaluator(mockResolver{id: "test-provider"})
 	mockProv := &mockProvider{}
 	registry := &mockRegistry{
 		providers: map[string]StorageProvider{"test-provider": mockProv},
@@ -120,7 +128,7 @@ func TestRouter_Upload(t *testing.T) {
 }
 
 func TestRouter_ProviderNotFound(t *testing.T) {
-	evaluator := policy.NewDefaultEvaluator("missing-provider")
+	evaluator := policy.NewDefaultEvaluator(mockResolver{id: "missing-provider"})
 	registry := &mockRegistry{
 		providers: map[string]StorageProvider{},
 	}

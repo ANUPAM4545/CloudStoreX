@@ -5,7 +5,8 @@ import (
 	"io"
 	"time"
 
-	"github.com/cloudstorex/backend/internal/policy"
+	"github.com/cloudstorex/backend/internal/policy/engine"
+	"github.com/cloudstorex/backend/internal/policy/model"
 	"github.com/google/uuid"
 )
 
@@ -23,21 +24,21 @@ type Router interface {
 
 type defaultRouter struct {
 	registry  ProviderRegistry
-	evaluator policy.Evaluator
+	engine    engine.PolicyEngine
 }
 
 // NewRouter creates a new central Storage Router.
-func NewRouter(registry ProviderRegistry, evaluator policy.Evaluator) Router {
+func NewRouter(registry ProviderRegistry, policyEngine engine.PolicyEngine) Router {
 	return &defaultRouter{
 		registry:  registry,
-		evaluator: evaluator,
+		engine:    policyEngine,
 	}
 }
 
-// resolveProvider determines the target provider ID using the policy evaluator
+// resolveProvider determines the target provider ID using the policy engine
 // and retrieves the provider instance from the registry.
-func (r *defaultRouter) resolveProvider(ctx context.Context, bucket, key string, size int64, meta *ObjectMetadata) (StorageProvider, string, error) {
-	evalCtx := &policy.EvaluationContext{
+func (r *defaultRouter) resolveProvider(ctx context.Context, bucket, key string, size int64, op string) (StorageProvider, string, error) {
+	evalCtx := &model.EvaluationContext{
 		Bucket:    bucket,
 		ObjectKey: key,
 		Size:      size,
@@ -50,7 +51,7 @@ func (r *defaultRouter) resolveProvider(ctx context.Context, bucket, key string,
 		}
 	}
 
-	providerID, err := r.evaluator.EvaluateProvider(ctx, evalCtx)
+	providerID, _, err := r.engine.Resolve(ctx, evalCtx, op)
 	if err != nil {
 		return nil, "", NewDomainError("resolve_provider", "", bucket, key, err)
 	}
@@ -64,7 +65,7 @@ func (r *defaultRouter) resolveProvider(ctx context.Context, bucket, key string,
 }
 
 func (r *defaultRouter) Upload(ctx context.Context, bucket, key string, reader io.Reader, size int64, meta *ObjectMetadata) (*StorageResponse, error) {
-	prov, providerID, err := r.resolveProvider(ctx, bucket, key, size, meta)
+	prov, providerID, err := r.resolveProvider(ctx, bucket, key, size, "Upload")
 	if err != nil {
 		return nil, err
 	}
@@ -76,7 +77,7 @@ func (r *defaultRouter) Upload(ctx context.Context, bucket, key string, reader i
 }
 
 func (r *defaultRouter) Download(ctx context.Context, bucket, key string) (io.ReadCloser, error) {
-	prov, providerID, err := r.resolveProvider(ctx, bucket, key, 0, nil)
+	prov, providerID, err := r.resolveProvider(ctx, bucket, key, 0, "Download")
 	if err != nil {
 		return nil, err
 	}
@@ -88,7 +89,7 @@ func (r *defaultRouter) Download(ctx context.Context, bucket, key string) (io.Re
 }
 
 func (r *defaultRouter) Delete(ctx context.Context, bucket, key string) error {
-	prov, providerID, err := r.resolveProvider(ctx, bucket, key, 0, nil)
+	prov, providerID, err := r.resolveProvider(ctx, bucket, key, 0, "Delete")
 	if err != nil {
 		return err
 	}
@@ -99,7 +100,7 @@ func (r *defaultRouter) Delete(ctx context.Context, bucket, key string) error {
 }
 
 func (r *defaultRouter) Exists(ctx context.Context, bucket, key string) (bool, error) {
-	prov, providerID, err := r.resolveProvider(ctx, bucket, key, 0, nil)
+	prov, providerID, err := r.resolveProvider(ctx, bucket, key, 0, "Exists")
 	if err != nil {
 		return false, err
 	}
@@ -111,7 +112,7 @@ func (r *defaultRouter) Exists(ctx context.Context, bucket, key string) (bool, e
 }
 
 func (r *defaultRouter) ListObjects(ctx context.Context, bucket, prefix string) ([]*Object, error) {
-	prov, providerID, err := r.resolveProvider(ctx, bucket, prefix, 0, nil)
+	prov, providerID, err := r.resolveProvider(ctx, bucket, prefix, 0, "ListObjects")
 	if err != nil {
 		return nil, err
 	}
@@ -123,7 +124,7 @@ func (r *defaultRouter) ListObjects(ctx context.Context, bucket, prefix string) 
 }
 
 func (r *defaultRouter) CreateBucket(ctx context.Context, bucket string) error {
-	prov, providerID, err := r.resolveProvider(ctx, bucket, "", 0, nil)
+	prov, providerID, err := r.resolveProvider(ctx, bucket, "", 0, "CreateBucket")
 	if err != nil {
 		return err
 	}
@@ -134,7 +135,7 @@ func (r *defaultRouter) CreateBucket(ctx context.Context, bucket string) error {
 }
 
 func (r *defaultRouter) DeleteBucket(ctx context.Context, bucket string) error {
-	prov, providerID, err := r.resolveProvider(ctx, bucket, "", 0, nil)
+	prov, providerID, err := r.resolveProvider(ctx, bucket, "", 0, "DeleteBucket")
 	if err != nil {
 		return err
 	}
@@ -145,7 +146,7 @@ func (r *defaultRouter) DeleteBucket(ctx context.Context, bucket string) error {
 }
 
 func (r *defaultRouter) ListBuckets(ctx context.Context) ([]*Bucket, error) {
-	prov, providerID, err := r.resolveProvider(ctx, "", "", 0, nil)
+	prov, providerID, err := r.resolveProvider(ctx, "", "", 0, "ListBuckets")
 	if err != nil {
 		return nil, err
 	}
@@ -157,7 +158,7 @@ func (r *defaultRouter) ListBuckets(ctx context.Context) ([]*Bucket, error) {
 }
 
 func (r *defaultRouter) GeneratePresignedURL(ctx context.Context, bucket, key string, expiration time.Duration) (string, error) {
-	prov, providerID, err := r.resolveProvider(ctx, bucket, key, 0, nil)
+	prov, providerID, err := r.resolveProvider(ctx, bucket, key, 0, "GeneratePresignedURL")
 	if err != nil {
 		return "", err
 	}
@@ -169,7 +170,7 @@ func (r *defaultRouter) GeneratePresignedURL(ctx context.Context, bucket, key st
 }
 
 func (r *defaultRouter) CopyObject(ctx context.Context, srcBucket, srcKey, destBucket, destKey string) (*StorageResponse, error) {
-	prov, providerID, err := r.resolveProvider(ctx, srcBucket, srcKey, 0, nil)
+	prov, providerID, err := r.resolveProvider(ctx, srcBucket, srcKey, 0, "CopyObject")
 	if err != nil {
 		return nil, err
 	}
@@ -181,7 +182,7 @@ func (r *defaultRouter) CopyObject(ctx context.Context, srcBucket, srcKey, destB
 }
 
 func (r *defaultRouter) MoveObject(ctx context.Context, srcBucket, srcKey, destBucket, destKey string) (*StorageResponse, error) {
-	prov, providerID, err := r.resolveProvider(ctx, srcBucket, srcKey, 0, nil)
+	prov, providerID, err := r.resolveProvider(ctx, srcBucket, srcKey, 0, "MoveObject")
 	if err != nil {
 		return nil, err
 	}
@@ -193,7 +194,7 @@ func (r *defaultRouter) MoveObject(ctx context.Context, srcBucket, srcKey, destB
 }
 
 func (r *defaultRouter) GetObjectMetadata(ctx context.Context, bucket, key string) (*ObjectMetadata, error) {
-	prov, providerID, err := r.resolveProvider(ctx, bucket, key, 0, nil)
+	prov, providerID, err := r.resolveProvider(ctx, bucket, key, 0, "GetObjectMetadata")
 	if err != nil {
 		return nil, err
 	}
@@ -205,7 +206,7 @@ func (r *defaultRouter) GetObjectMetadata(ctx context.Context, bucket, key strin
 }
 
 func (r *defaultRouter) SetObjectMetadata(ctx context.Context, bucket, key string, meta *ObjectMetadata) error {
-	prov, providerID, err := r.resolveProvider(ctx, bucket, key, 0, meta)
+	prov, providerID, err := r.resolveProvider(ctx, bucket, key, 0, "SetObjectMetadata")
 	if err != nil {
 		return err
 	}
@@ -216,7 +217,7 @@ func (r *defaultRouter) SetObjectMetadata(ctx context.Context, bucket, key strin
 }
 
 func (r *defaultRouter) GetObjectTags(ctx context.Context, bucket, key string) (map[string]string, error) {
-	prov, providerID, err := r.resolveProvider(ctx, bucket, key, 0, nil)
+	prov, providerID, err := r.resolveProvider(ctx, bucket, key, 0, "GetObjectTags")
 	if err != nil {
 		return nil, err
 	}
@@ -228,7 +229,7 @@ func (r *defaultRouter) GetObjectTags(ctx context.Context, bucket, key string) (
 }
 
 func (r *defaultRouter) SetObjectTags(ctx context.Context, bucket, key string, tags map[string]string) error {
-	prov, providerID, err := r.resolveProvider(ctx, bucket, key, 0, nil)
+	prov, providerID, err := r.resolveProvider(ctx, bucket, key, 0, "SetObjectTags")
 	if err != nil {
 		return err
 	}
@@ -239,7 +240,7 @@ func (r *defaultRouter) SetObjectTags(ctx context.Context, bucket, key string, t
 }
 
 func (r *defaultRouter) CreateMultipartUpload(ctx context.Context, bucket, key string, meta *ObjectMetadata) (*MultipartUpload, error) {
-	prov, providerID, err := r.resolveProvider(ctx, bucket, key, 0, meta)
+	prov, providerID, err := r.resolveProvider(ctx, bucket, key, 0, "CreateMultipartUpload")
 	if err != nil {
 		return nil, err
 	}
@@ -251,7 +252,7 @@ func (r *defaultRouter) CreateMultipartUpload(ctx context.Context, bucket, key s
 }
 
 func (r *defaultRouter) UploadPart(ctx context.Context, uploadID, bucket, key string, partNumber int, reader io.Reader, size int64) (*UploadPart, error) {
-	prov, providerID, err := r.resolveProvider(ctx, bucket, key, size, nil)
+	prov, providerID, err := r.resolveProvider(ctx, bucket, key, size, "UploadPart")
 	if err != nil {
 		return nil, err
 	}
@@ -263,7 +264,7 @@ func (r *defaultRouter) UploadPart(ctx context.Context, uploadID, bucket, key st
 }
 
 func (r *defaultRouter) CompleteMultipartUpload(ctx context.Context, uploadID, bucket, key string, parts []*UploadPart) (*StorageResponse, error) {
-	prov, providerID, err := r.resolveProvider(ctx, bucket, key, 0, nil)
+	prov, providerID, err := r.resolveProvider(ctx, bucket, key, 0, "CompleteMultipartUpload")
 	if err != nil {
 		return nil, err
 	}
@@ -275,7 +276,7 @@ func (r *defaultRouter) CompleteMultipartUpload(ctx context.Context, uploadID, b
 }
 
 func (r *defaultRouter) AbortMultipartUpload(ctx context.Context, uploadID, bucket, key string) error {
-	prov, providerID, err := r.resolveProvider(ctx, bucket, key, 0, nil)
+	prov, providerID, err := r.resolveProvider(ctx, bucket, key, 0, "AbortMultipartUpload")
 	if err != nil {
 		return err
 	}
@@ -286,7 +287,7 @@ func (r *defaultRouter) AbortMultipartUpload(ctx context.Context, uploadID, buck
 }
 
 func (r *defaultRouter) ListObjectVersions(ctx context.Context, bucket, key string) ([]*Object, error) {
-	prov, providerID, err := r.resolveProvider(ctx, bucket, key, 0, nil)
+	prov, providerID, err := r.resolveProvider(ctx, bucket, key, 0, "ListObjectVersions")
 	if err != nil {
 		return nil, err
 	}

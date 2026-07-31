@@ -11,12 +11,26 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/cloudstorex/backend/internal/config"
 	"github.com/cloudstorex/backend/internal/database"
 	"github.com/cloudstorex/backend/internal/identity"
 	"github.com/cloudstorex/backend/internal/middleware"
-	"github.com/cloudstorex/backend/internal/policy"
+	"github.com/cloudstorex/backend/internal/metadata/events"
+	"github.com/cloudstorex/backend/internal/metadata/repository"
+	"github.com/cloudstorex/backend/internal/metadata/service"
+	"github.com/cloudstorex/backend/internal/policy/engine"
+	policyEvents "github.com/cloudstorex/backend/internal/policy/events"
+	policyHandlerPkg "github.com/cloudstorex/backend/internal/policy/handler"
+	policyRepo "github.com/cloudstorex/backend/internal/policy/repository"
+	"github.com/cloudstorex/backend/internal/policy/rules"
+	policySvc "github.com/cloudstorex/backend/internal/policy/service"
 	"github.com/cloudstorex/backend/internal/provider"
+	"github.com/cloudstorex/backend/internal/provider/aws"
+	"github.com/cloudstorex/backend/internal/provider/dto"
+	providerRepo "github.com/cloudstorex/backend/internal/provider/repository"
+	providerSvc "github.com/cloudstorex/backend/internal/provider/service"
 	"github.com/cloudstorex/backend/internal/provider/minio"
 	"github.com/cloudstorex/backend/internal/shared/logger"
 	"github.com/cloudstorex/backend/internal/shared/response"
@@ -31,8 +45,10 @@ type App struct {
 	DB              *gorm.DB
 	RedisClient     *redis.Client
 	StorageRegistry provider.Registry
+	ProviderService providerSvc.ProviderService
 	StorageRouter   storage.Router
 	StorageService  storage.Service
+	PolicyService   policySvc.PolicyService
 	Router          *gin.Engine
 }
 
@@ -62,8 +78,28 @@ func NewApp() (*App, error) {
 		return nil, err
 	}
 
-	// Initialize Storage Domain & MinIO Provider
+	// Initialize Provider Domain
+	providerRepository := providerRepo.NewPostgresRepository(db)
+	providerValidator := providerSvc.NewProviderValidator()
+	providerService := providerSvc.NewProviderService(providerRepository, providerValidator)
+	
 	storageRegistry := provider.NewRegistry()
+
+	// Sync MinIO from config to DB (if not exists)
+	ctx := context.Background()
+	defaultWorkspaceID := uuid.MustParse("00000000-0000-0000-0000-000000000000") // TODO: use real workspace ID logic later
+	_, err = providerService.GetDefaultProvider(ctx, defaultWorkspaceID.String())
+	if err != nil && errors.Is(err, storage.ErrProviderNotFound) {
+		providerService.CreateProvider(ctx, dto.CreateProviderRequest{
+			WorkspaceID:  defaultWorkspaceID,
+			ProviderName: "minio",
+			ProviderType: "MINIO",
+			Endpoint:     cfg.MinioEndpoint,
+			BucketPrefix: "cloudstorex-",
+			IsDefault:    true,
+		})
+	}
+	
 	minioCfg := &minio.Config{
 		Endpoint:      cfg.MinioEndpoint,
 		AccessKey:     cfg.MinioAccessKey,
@@ -71,7 +107,9 @@ func NewApp() (*App, error) {
 		DefaultBucket: cfg.MinioBucket,
 		UseSSL:        cfg.MinioUseSSL,
 	}
-	minioProv, err := minio.NewProvider(context.Background(), minioCfg, logger.Log)
+	
+	// Register MinIO to runtime registry
+	minioProv, err := minio.NewProvider(ctx, minioCfg, logger.Log)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize MinIO provider: %w", err)
 	}
@@ -79,17 +117,75 @@ func NewApp() (*App, error) {
 		return nil, fmt.Errorf("failed to register MinIO provider: %w", err)
 	}
 
-	policyEvaluator := policy.NewDefaultEvaluator("minio")
-	storageRouter := storage.NewRouter(storageRegistry, policyEvaluator)
-	storageService := storage.NewService(storageRouter)
+	// Setup AWS Provider if configured
+	if cfg.AwsAccessKeyID != "" {
+		awsCfg := &aws.Config{
+			Region:          cfg.AwsRegion,
+			Endpoint:        cfg.AwsEndpoint,
+			AccessKeyID:     cfg.AwsAccessKeyID,
+			SecretAccessKey: cfg.AwsSecretAccessKey,
+			BucketPrefix:    cfg.AwsBucketPrefix,
+		}
+		awsProv, err := aws.NewProvider(ctx, awsCfg, logger.Log)
+		if err != nil {
+			return nil, fmt.Errorf("failed to initialize AWS provider: %w", err)
+		}
+		if err := storageRegistry.Register("aws", awsProv); err != nil {
+			return nil, fmt.Errorf("failed to register AWS provider: %w", err)
+		}
+
+		// Sync AWS to DB
+		_, err = providerService.GetDefaultProvider(ctx, defaultWorkspaceID.String())
+		// If AWS doesn't exist, we should probably fetch by name to avoid recreating.
+		// Since we changed GetByName to require workspace_id, we'll just check if we have an AWS provider.
+		awsProviders, _ := providerService.ListProviders(ctx, defaultWorkspaceID.String())
+		hasAws := false
+		for _, p := range awsProviders {
+			if p.ProviderName == "aws" {
+				hasAws = true
+				break
+			}
+		}
+		if !hasAws {
+			providerService.CreateProvider(ctx, dto.CreateProviderRequest{
+				WorkspaceID:  defaultWorkspaceID,
+				ProviderName: "aws",
+				ProviderType: "AWS_S3",
+				Endpoint:     cfg.AwsEndpoint,
+				Region:       cfg.AwsRegion,
+				BucketPrefix: cfg.AwsBucketPrefix,
+				IsDefault:    false, // Default stays minio initially
+			})
+		}
+	}
+
+	policyRepository := policyRepo.NewPostgresRepository(db)
+	policyService := policySvc.NewPolicyService(policyRepository)
+	policyRuleRegistry := rules.NewRegistry()
+	policyRuleRegistry.Register(&rules.DefaultRule{})
+	policyRuleRegistry.Register(&rules.RegionRule{})
+	policyRuleRegistry.Register(&rules.ObjectSizeRule{})
+	policyEngineEvaluator := engine.NewEvaluator(policyRuleRegistry)
+	policyEventPub := policyEvents.NewLogPublisher(logger.Log)
+	policyEngine := engine.NewPolicyEngine(policyRepository, policyEngineEvaluator, providerService, policyEventPub)
+
+	storageRouter := storage.NewRouter(storageRegistry, policyEngine)
+
+	metadataRepo := repository.NewPostgresMetadataRepository(db)
+	metadataEvents := events.NewLogPublisher(logger.Log)
+	metadataService := service.NewMetadataService(metadataRepo, metadataEvents)
+
+	storageService := storage.NewService(storageRouter, metadataService)
 
 	app := &App{
 		Config:          cfg,
 		DB:              db,
 		RedisClient:     redisClient,
 		StorageRegistry: storageRegistry,
+		ProviderService: providerService,
 		StorageRouter:   storageRouter,
 		StorageService:  storageService,
+		PolicyService:   policyService,
 		Router:          gin.New(), // Create without default middlewares
 	}
 
@@ -136,6 +232,29 @@ func (a *App) setupRoutes() {
 		})
 	})
 
+	// Provider routes
+	providerHandler := provider.NewHandler(a.ProviderService)
+	v1.GET("/providers", providerHandler.ListProviders)
+	v1.POST("/providers", providerHandler.CreateProvider)
+	v1.GET("/providers/:id", providerHandler.GetProvider)
+	v1.PUT("/providers/:id", providerHandler.UpdateProvider)
+	v1.DELETE("/providers/:id", providerHandler.DeleteProvider)
+	v1.POST("/providers/:id/validate", providerHandler.ValidateProvider)
+	v1.POST("/providers/:id/default", providerHandler.SetDefaultProvider)
+	v1.POST("/providers/:id/enable", providerHandler.EnableProvider)
+	v1.POST("/providers/:id/disable", providerHandler.DisableProvider)
+
+	// Policy routes
+	policyHandler := policyHandlerPkg.NewHandler(a.PolicyService)
+	v1.GET("/policies", policyHandler.ListPolicies)
+	v1.POST("/policies", policyHandler.CreatePolicy)
+	v1.GET("/policies/:id", policyHandler.GetPolicy)
+	v1.PUT("/policies/:id", policyHandler.UpdatePolicy)
+	v1.DELETE("/policies/:id", policyHandler.DeletePolicy)
+	v1.POST("/policies/:id/enable", policyHandler.EnablePolicy)
+	v1.POST("/policies/:id/disable", policyHandler.DisablePolicy)
+	v1.GET("/routing-decisions", policyHandler.ListRoutingDecisions)
+
 	// Identity dependencies
 	tokenService := identity.NewTokenService(a.Config.JWTSecret)
 	identityRepo := identity.NewRepository(a.DB)
@@ -173,6 +292,13 @@ func (a *App) setupRoutes() {
 		storageGroup.GET("/buckets/:bucket/objects/*key", storageHandler.DownloadObject)
 		storageGroup.DELETE("/buckets/:bucket/objects/*key", storageHandler.DeleteObject)
 		storageGroup.HEAD("/buckets/:bucket/objects/*key", storageHandler.ObjectExists)
+
+		// Global Object APIs
+		storageGroup.GET("/search", storageHandler.SearchObjects)
+		storageGroup.GET("/objects/:id", storageHandler.GetObjectByID)
+		storageGroup.GET("/objects/:id/metadata", storageHandler.GetObjectMetadata)
+		storageGroup.POST("/objects/:id/tags", storageHandler.TagObject)
+		storageGroup.DELETE("/objects/:id/tags/:key", storageHandler.UntagObject)
 	}
 
 	// OpenAPI & Swagger UI routes (public)

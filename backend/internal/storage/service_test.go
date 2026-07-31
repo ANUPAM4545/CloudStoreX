@@ -15,7 +15,7 @@ type mockRouter struct {
 func TestService_UploadAndDownloadObject(t *testing.T) {
 	mockProv := &mockProvider{}
 	router := &mockRouter{StorageProvider: mockProv}
-	svc := NewService(router)
+	svc := NewService(router, &mockMetadataService{})
 
 	ctx := context.WithValue(context.Background(), CtxKeyRequestID, "req-12345")
 	ctx = context.WithValue(ctx, CtxKeyWorkspaceID, "ws-67890")
@@ -40,7 +40,7 @@ func TestService_UploadAndDownloadObject(t *testing.T) {
 func TestService_AllOperations(t *testing.T) {
 	mockProv := &mockProvider{}
 	router := &mockRouter{StorageProvider: mockProv}
-	svc := NewService(router)
+	svc := NewService(router, &mockMetadataService{})
 
 	ctx := context.Background()
 

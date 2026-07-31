@@ -22,9 +22,16 @@ type Config struct {
 	MinioEndpoint  string `mapstructure:"MINIO_ENDPOINT"`
 	MinioAccessKey string `mapstructure:"MINIO_ACCESS_KEY"`
 	MinioSecretKey string `mapstructure:"MINIO_SECRET_KEY"`
-	MinioBucket     string `mapstructure:"MINIO_BUCKET"`
-	MinioUseSSL     bool   `mapstructure:"MINIO_USE_SSL"`
-	MaxUploadSizeMB int64  `mapstructure:"MAX_UPLOAD_SIZE_MB"`
+	MinioBucket    string `mapstructure:"MINIO_BUCKET"`
+	MinioUseSSL    bool   `mapstructure:"MINIO_USE_SSL"`
+
+	AwsAccessKeyID     string `mapstructure:"AWS_ACCESS_KEY_ID"`
+	AwsSecretAccessKey string `mapstructure:"AWS_SECRET_ACCESS_KEY"`
+	AwsRegion          string `mapstructure:"AWS_REGION"`
+	AwsEndpoint        string `mapstructure:"AWS_ENDPOINT"`
+	AwsBucketPrefix    string `mapstructure:"AWS_BUCKET_PREFIX"`
+
+	MaxUploadSizeMB int64 `mapstructure:"MAX_UPLOAD_SIZE_MB"`
 }
 
 func LoadConfig() (*Config, error) {
@@ -47,6 +54,11 @@ func LoadConfig() (*Config, error) {
 	viper.SetDefault("MINIO_SECRET_KEY", "password123")
 	viper.SetDefault("MINIO_BUCKET", "cloudstorex-default")
 	viper.SetDefault("MINIO_USE_SSL", false)
+
+	viper.SetDefault("AWS_REGION", "us-east-1")
+	viper.SetDefault("AWS_ENDPOINT", "")
+	viper.SetDefault("AWS_BUCKET_PREFIX", "cloudstorex-")
+	
 	viper.SetDefault("MAX_UPLOAD_SIZE_MB", 100)
 
 	var config Config

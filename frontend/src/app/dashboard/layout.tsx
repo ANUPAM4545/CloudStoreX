@@ -13,6 +13,7 @@ import {
   LogOut,
   LayoutDashboard,
   Cloud,
+  Shield,
 } from "lucide-react";
 
 export default function DashboardLayout({
@@ -37,6 +38,8 @@ export default function DashboardLayout({
   const isOverviewActive = pathname === "/dashboard/overview";
   const isBucketsActive =
     pathname === "/dashboard/buckets" || pathname?.startsWith("/dashboard/bucket/");
+  const isProvidersActive = pathname === "/dashboard/providers";
+  const isPoliciesActive = pathname === "/dashboard/policies";
 
   return (
     <div className="flex h-screen overflow-hidden bg-background">
@@ -93,11 +96,27 @@ export default function DashboardLayout({
           </Link>
 
           <Link
-            href="/dashboard/buckets"
-            className="flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium text-muted-foreground hover:bg-muted/60 hover:text-foreground transition-colors"
+            href="/dashboard/providers"
+            className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+              isProvidersActive
+                ? "bg-primary text-primary-foreground shadow-xs"
+                : "text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+            }`}
           >
             <Database size={18} />
             <span>Providers</span>
+          </Link>
+
+          <Link
+            href="/dashboard/policies"
+            className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+              isPoliciesActive
+                ? "bg-primary text-primary-foreground shadow-xs"
+                : "text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+            }`}
+          >
+            <Shield size={18} />
+            <span>Policies</span>
           </Link>
 
           <Link

@@ -1,25 +1,36 @@
-FROM golang:1.22-alpine AS builder
+# Stage 1: Build the Go application
+FROM golang:1.23-alpine AS builder
+
+# Install SSL ca certificates and tzdata
+RUN apk --no-cache add ca-certificates tzdata
 
 WORKDIR /app
 
+# Copy dependency manifests first to leverage Docker layer caching
 COPY go.mod go.sum ./
 RUN go mod download
 
+# Copy application source code
 COPY . .
 
-# Build the Go app
-RUN CGO_ENABLED=0 GOOS=linux go build -o main ./cmd/server
+# Build static binary with optimizations (-s -w strips debug symbol table)
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o /app/cloudstorex-server ./cmd/server
 
-# Start a new stage from scratch
-FROM alpine:latest  
+# Stage 2: Minimal Distroless non-root runtime (Refinement 5)
+FROM gcr.io/distroless/static-debian12:nonroot AS runtime
 
-RUN apk --no-cache add ca-certificates tzdata
+# Copy timezone data and CA certs from builder
+COPY --from=builder /usr/share/zoneinfo /usr/share/zoneinfo
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 
-WORKDIR /root/
+WORKDIR /
 
-# Copy the Pre-built binary file from the previous stage
-COPY --from=builder /app/main .
+# Copy the static binary
+COPY --from=builder /app/cloudstorex-server /cloudstorex-server
+
+# Ensure non-root execution (UID 65532 is standard nonroot in distroless)
+USER 65532:65532
 
 EXPOSE 8080
 
-CMD ["./main"]
+ENTRYPOINT ["/cloudstorex-server"]

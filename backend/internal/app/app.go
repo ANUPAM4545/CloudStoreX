@@ -13,9 +13,13 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cloudstorex/backend/internal/analytics"
+	"github.com/cloudstorex/backend/internal/audit"
 	"github.com/cloudstorex/backend/internal/config"
 	"github.com/cloudstorex/backend/internal/database"
 	"github.com/cloudstorex/backend/internal/identity"
+	"github.com/cloudstorex/backend/internal/jobs"
+	"github.com/cloudstorex/backend/internal/lifecycle"
 	"github.com/cloudstorex/backend/internal/middleware"
 	"github.com/cloudstorex/backend/internal/metadata/events"
 	"github.com/cloudstorex/backend/internal/metadata/repository"
@@ -32,9 +36,11 @@ import (
 	providerRepo "github.com/cloudstorex/backend/internal/provider/repository"
 	providerSvc "github.com/cloudstorex/backend/internal/provider/service"
 	"github.com/cloudstorex/backend/internal/provider/minio"
+	"github.com/cloudstorex/backend/internal/quota"
 	"github.com/cloudstorex/backend/internal/shared/logger"
 	"github.com/cloudstorex/backend/internal/shared/response"
 	"github.com/cloudstorex/backend/internal/storage"
+	"github.com/cloudstorex/backend/internal/workers"
 	"github.com/gin-gonic/gin"
 	redis "github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
@@ -47,8 +53,14 @@ type App struct {
 	StorageRegistry provider.Registry
 	ProviderService providerSvc.ProviderService
 	StorageRouter   storage.Router
-	StorageService  storage.Service
-	PolicyService   policySvc.PolicyService
+	StorageService   storage.Service
+	PolicyService    policySvc.PolicyService
+	QuotaService     quota.Service
+	LifecycleService lifecycle.Service
+	AuditService     audit.Service
+	AnalyticsService analytics.Service
+	JobClient        jobs.Client
+	JobDispatcher   jobs.Dispatcher
 	Router          *gin.Engine
 }
 
@@ -171,11 +183,35 @@ func NewApp() (*App, error) {
 
 	storageRouter := storage.NewRouter(storageRegistry, policyEngine)
 
+	jobRegistry := jobs.NewRegistry()
+	jobClient := jobs.NewClient(db, redisClient)
+	jobDispatcher := jobs.NewDispatcher(db, redisClient, jobRegistry, 5)
+
 	metadataRepo := repository.NewPostgresMetadataRepository(db)
-	metadataEvents := events.NewLogPublisher(logger.Log)
+	metadataEvents := events.NewJobEventPublisher(jobClient, logger.Log)
 	metadataService := service.NewMetadataService(metadataRepo, metadataEvents)
 
-	storageService := storage.NewService(storageRouter, metadataService)
+	quotaRepo := quota.NewPostgresRepository(db)
+	quotaService := quota.NewService(quotaRepo, logger.Log)
+
+	storageService := storage.NewService(storageRouter, metadataService, quotaService)
+
+	lifecycleRepo := lifecycle.NewPostgresRepository(db)
+	lifecycleService := lifecycle.NewService(lifecycleRepo, logger.Log)
+
+	auditRepo := audit.NewPostgresRepository(db)
+	auditService := audit.NewService(auditRepo, logger.Log)
+
+	analyticsRepo := analytics.NewPostgresRepository(db)
+	analyticsService := analytics.NewService(analyticsRepo, logger.Log)
+
+	// Register Jobs
+	jobRegistry.Register("ProcessEvent", workers.NewEventIntegrationWorker(quotaService, logger.Log))
+	jobRegistry.Register("SoftDeleteCleanup", workers.NewSoftDeleteCleanupWorker(storageRouter, metadataService, logger.Log))
+	jobRegistry.Register("VersionCleanup", workers.NewVersionCleanupWorker(logger.Log))
+	jobRegistry.Register("Lifecycle", workers.NewLifecycleWorker(lifecycleRepo, metadataService, storageService, logger.Log))
+	jobRegistry.Register("AuditLog", workers.NewAuditWorker(auditService, logger.Log))
+	jobRegistry.Register("AnalyticsAggregation", workers.NewAnalyticsWorker(analyticsService, quotaService, logger.Log))
 
 	app := &App{
 		Config:          cfg,
@@ -183,9 +219,15 @@ func NewApp() (*App, error) {
 		RedisClient:     redisClient,
 		StorageRegistry: storageRegistry,
 		ProviderService: providerService,
-		StorageRouter:   storageRouter,
-		StorageService:  storageService,
-		PolicyService:   policyService,
+		StorageRouter:    storageRouter,
+		StorageService:   storageService,
+		PolicyService:    policyService,
+		QuotaService:     quotaService,
+		LifecycleService: lifecycleService,
+		AuditService:     auditService,
+		AnalyticsService: analyticsService,
+		JobClient:        jobClient,
+		JobDispatcher:   jobDispatcher,
 		Router:          gin.New(), // Create without default middlewares
 	}
 
@@ -203,24 +245,82 @@ func (a *App) setupMiddlewares() {
 }
 
 func (a *App) setupRoutes() {
+	livenessHandler := func(c *gin.Context) {
+		response.Success(c, http.StatusOK, gin.H{
+			"status": "up",
+		})
+	}
+
+	readinessHandler := func(c *gin.Context) {
+		if a.DB == nil {
+			response.Error(c, http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE", "database unreachable")
+			return
+		}
+		sqlDB, err := a.DB.DB()
+		if err != nil || sqlDB.Ping() != nil {
+			response.Error(c, http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE", "database unreachable")
+			return
+		}
+		if a.RedisClient == nil || a.RedisClient.Ping(c.Request.Context()).Err() != nil {
+			response.Error(c, http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE", "redis unreachable")
+			return
+		}
+		if a.StorageRegistry == nil || len(a.StorageRegistry.List()) == 0 {
+			response.Error(c, http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE", "provider registry uninitialized or empty")
+			return
+		}
+		if a.PolicyService == nil {
+			response.Error(c, http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE", "policy engine uninitialized")
+			return
+		}
+		if a.JobDispatcher == nil || a.JobClient == nil {
+			response.Error(c, http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE", "background worker queue disconnected")
+			return
+		}
+
+		response.Success(c, http.StatusOK, gin.H{
+			"status":        "ready",
+			"postgres":      "up",
+			"redis":         "up",
+			"providers":     len(a.StorageRegistry.List()),
+			"policy_engine": "up",
+			"workers":       "up",
+		})
+	}
+
+	a.Router.GET("/healthz", livenessHandler)
+	a.Router.GET("/livez", livenessHandler)
+	a.Router.GET("/readyz", readinessHandler)
+
 	v1 := a.Router.Group("/api/v1")
-	
+
+	v1.GET("/live", livenessHandler)
+	v1.GET("/ready", readinessHandler)
+
 	// Health check
 	v1.GET("/health", func(c *gin.Context) {
 		dbStatus := "down"
-		sqlDB, err := a.DB.DB()
-		if err == nil && sqlDB.Ping() == nil {
-			dbStatus = "up"
+		if a.DB != nil {
+			if sqlDB, err := a.DB.DB(); err == nil && sqlDB.Ping() == nil {
+				dbStatus = "up"
+			}
 		}
 		
 		redisStatus := "down"
-		if a.RedisClient.Ping(c.Request.Context()).Err() == nil {
+		if a.RedisClient != nil && a.RedisClient.Ping(c.Request.Context()).Err() == nil {
 			redisStatus = "up"
 		}
 
+		minioBucket := "cloudstorex-default"
+		if a.Config != nil && a.Config.MinioBucket != "" {
+			minioBucket = a.Config.MinioBucket
+		}
+
 		minioStatus := "down"
-		if exists, err := a.StorageService.ObjectExists(c.Request.Context(), a.Config.MinioBucket, "health-check-dummy-key"); err == nil || errors.Is(err, storage.ErrObjectNotFound) || !exists {
-			minioStatus = "up"
+		if a.StorageService != nil {
+			if exists, err := a.StorageService.ObjectExists(c.Request.Context(), minioBucket, "health-check-dummy-key"); err == nil || errors.Is(err, storage.ErrObjectNotFound) || !exists {
+				minioStatus = "up"
+			}
 		}
 
 		response.Success(c, http.StatusOK, gin.H{
@@ -256,7 +356,17 @@ func (a *App) setupRoutes() {
 	v1.GET("/routing-decisions", policyHandler.ListRoutingDecisions)
 
 	// Identity dependencies
-	tokenService := identity.NewTokenService(a.Config.JWTSecret)
+	jwtSecret := "default_jwt_secret"
+	maxUploadSizeMB := int64(100)
+	if a.Config != nil {
+		if a.Config.JWTSecret != "" {
+			jwtSecret = a.Config.JWTSecret
+		}
+		if a.Config.MaxUploadSizeMB > 0 {
+			maxUploadSizeMB = a.Config.MaxUploadSizeMB
+		}
+	}
+	tokenService := identity.NewTokenService(jwtSecret)
 	identityRepo := identity.NewRepository(a.DB)
 	identityService := identity.NewService(identityRepo, tokenService)
 	identityHandler := identity.NewHandler(identityService)
@@ -277,7 +387,7 @@ func (a *App) setupRoutes() {
 	}
 
 	// Storage routes (protected by auth middleware)
-	storageHandler := storage.NewHandler(a.StorageService, a.Config.MaxUploadSizeMB)
+	storageHandler := storage.NewHandler(a.StorageService, maxUploadSizeMB)
 	storageGroup := v1.Group("/storage")
 	storageGroup.Use(middleware.AuthMiddleware(tokenService))
 	{
@@ -292,6 +402,8 @@ func (a *App) setupRoutes() {
 		storageGroup.GET("/buckets/:bucket/objects/*key", storageHandler.DownloadObject)
 		storageGroup.DELETE("/buckets/:bucket/objects/*key", storageHandler.DeleteObject)
 		storageGroup.HEAD("/buckets/:bucket/objects/*key", storageHandler.ObjectExists)
+		storageGroup.POST("/buckets/:bucket/presigned-upload/*key", storageHandler.GeneratePresignedUploadURL)
+		storageGroup.GET("/buckets/:bucket/presigned-download/*key", storageHandler.GeneratePresignedDownloadURL)
 
 		// Global Object APIs
 		storageGroup.GET("/search", storageHandler.SearchObjects)
@@ -299,6 +411,46 @@ func (a *App) setupRoutes() {
 		storageGroup.GET("/objects/:id/metadata", storageHandler.GetObjectMetadata)
 		storageGroup.POST("/objects/:id/tags", storageHandler.TagObject)
 		storageGroup.DELETE("/objects/:id/tags/:key", storageHandler.UntagObject)
+		storageGroup.GET("/objects/:id/versions", storageHandler.ListObjectVersions)
+		storageGroup.POST("/objects/:id/restore", storageHandler.RestoreObject)
+		storageGroup.POST("/objects/:id/legal-hold", storageHandler.SetLegalHold)
+		storageGroup.POST("/objects/:id/retention", storageHandler.SetRetention)
+	}
+
+	// Quota APIs
+	quotaHandler := quota.NewHandler(a.QuotaService)
+	quotaGroup := v1.Group("/quotas")
+	quotaGroup.Use(middleware.AuthMiddleware(tokenService))
+	{
+		quotaGroup.POST("/workspaces/:workspace_id", quotaHandler.SetWorkspaceQuota)
+		quotaGroup.GET("/workspaces/:workspace_id", quotaHandler.GetWorkspaceQuota)
+	}
+
+	// Lifecycle APIs
+	lifecycleHandler := lifecycle.NewHandler(a.LifecycleService)
+	lifecycleGroup := v1.Group("/lifecycle")
+	lifecycleGroup.Use(middleware.AuthMiddleware(tokenService))
+	{
+		lifecycleGroup.POST("/buckets/:bucket_id/rules", lifecycleHandler.CreateRule)
+		lifecycleGroup.GET("/buckets/:bucket_id/rules", lifecycleHandler.ListRules)
+		lifecycleGroup.DELETE("/rules/:id", lifecycleHandler.DeleteRule)
+	}
+
+	// Audit APIs
+	auditHandler := audit.NewHandler(a.AuditService)
+	auditGroup := v1.Group("/audit-logs")
+	auditGroup.Use(middleware.AuthMiddleware(tokenService))
+	{
+		auditGroup.GET("/workspaces/:workspace_id", auditHandler.ListLogs)
+	}
+
+	// Analytics APIs
+	analyticsHandler := analytics.NewHandler(a.AnalyticsService)
+	analyticsGroup := v1.Group("/analytics")
+	analyticsGroup.Use(middleware.AuthMiddleware(tokenService))
+	{
+		analyticsGroup.GET("/workspaces/:workspace_id/history", analyticsHandler.GetAnalyticsHistory)
+		analyticsGroup.GET("/workspaces/:workspace_id/latest", analyticsHandler.GetLatestMetrics)
 	}
 
 	// OpenAPI & Swagger UI routes (public)
@@ -348,15 +500,22 @@ func (a *App) Run() error {
 		}
 	}()
 
+	// Start Job Dispatcher
+	ctx, cancel := context.WithCancel(context.Background())
+	a.JobDispatcher.Start(ctx)
+
 	// Wait for interrupt signal to gracefully shutdown the server
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 	slog.Info("Shutting down server...")
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := srv.Shutdown(ctx); err != nil {
+	cancel() // Cancel context to stop fetching jobs
+	a.JobDispatcher.Stop()
+
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer shutdownCancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
 		slog.Error("Server forced to shutdown", slog.String("error", err.Error()))
 		return err
 	}

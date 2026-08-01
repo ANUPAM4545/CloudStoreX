@@ -38,10 +38,13 @@ import (
 	"github.com/cloudstorex/backend/internal/provider/minio"
 	"github.com/cloudstorex/backend/internal/quota"
 	"github.com/cloudstorex/backend/internal/shared/logger"
+	"github.com/cloudstorex/backend/internal/observability/metrics"
+	"github.com/cloudstorex/backend/internal/observability/tracing"
 	"github.com/cloudstorex/backend/internal/shared/response"
 	"github.com/cloudstorex/backend/internal/storage"
 	"github.com/cloudstorex/backend/internal/workers"
 	"github.com/gin-gonic/gin"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	redis "github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 )
@@ -71,6 +74,12 @@ func NewApp() (*App, error) {
 	}
 
 	logger.InitLogger(cfg.AppEnv)
+
+	_, err = tracing.InitTracer("cloudstorex-backend", cfg.AppEnv)
+	if err != nil {
+		logger.Log.Warn("Failed to initialize OpenTelemetry tracer", slog.String("error", err.Error()))
+	}
+	_ = metrics.StartRuntimeMetricCollector(15 * time.Second)
 
 	if cfg.AppEnv == "production" {
 		gin.SetMode(gin.ReleaseMode)
@@ -239,6 +248,8 @@ func NewApp() (*App, error) {
 
 func (a *App) setupMiddlewares() {
 	a.Router.Use(middleware.Recovery())
+	a.Router.Use(middleware.OpenTelemetryMiddleware("cloudstorex-backend"))
+	a.Router.Use(middleware.PrometheusMiddleware())
 	a.Router.Use(middleware.RequestLogger())
 	a.Router.Use(middleware.SecurityHeaders())
 	a.Router.Use(middleware.CORS(a.Config))
@@ -287,6 +298,16 @@ func (a *App) setupRoutes() {
 			"workers":       "up",
 		})
 	}
+
+	a.Router.GET("/metrics", gin.WrapH(promhttp.Handler()))
+
+	enablePprof := false
+	pprofToken := ""
+	if a.Config != nil {
+		enablePprof = a.Config.EnablePprof
+		pprofToken = a.Config.PprofToken
+	}
+	RegisterPprof(a.Router, enablePprof, pprofToken)
 
 	a.Router.GET("/healthz", livenessHandler)
 	a.Router.GET("/livez", livenessHandler)

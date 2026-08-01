@@ -9,9 +9,11 @@ import (
 
 	"github.com/cloudstorex/backend/internal/metadata/dto"
 	"github.com/cloudstorex/backend/internal/metadata/service"
+	"github.com/cloudstorex/backend/internal/observability/tracing"
 	"github.com/cloudstorex/backend/internal/quota"
 	"github.com/cloudstorex/backend/internal/shared/logger"
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 // Service defines the application-level storage contract.
@@ -64,6 +66,8 @@ func (s *defaultService) logOperation(ctx context.Context, op, bucket, key strin
 	duration := time.Since(start)
 	reqID := GetContextValue(ctx, CtxKeyRequestID)
 	workspaceID := GetContextValue(ctx, CtxKeyWorkspaceID)
+	traceID := tracing.ExtractTraceID(ctx)
+	spanID := tracing.ExtractSpanID(ctx)
 
 	level := slog.LevelInfo
 	result := "success"
@@ -81,6 +85,8 @@ func (s *defaultService) logOperation(ctx context.Context, op, bucket, key strin
 		slog.String("key", key),
 		slog.String("request_id", reqID),
 		slog.String("workspace_id", workspaceID),
+		slog.String("trace_id", traceID),
+		slog.String("span_id", spanID),
 		slog.Duration("duration", duration),
 		slog.String("result", result),
 		slog.String("error", errStr),
@@ -88,6 +94,14 @@ func (s *defaultService) logOperation(ctx context.Context, op, bucket, key strin
 }
 
 func (s *defaultService) UploadObject(ctx context.Context, bucket, key string, reader io.Reader, size int64, meta *ObjectMetadata) (*StorageResponse, error) {
+	ctx, span := tracing.StartChildSpan(ctx, "StorageService.UploadObject")
+	defer span.End()
+	span.SetAttributes(
+		attribute.String("storage.bucket", bucket),
+		attribute.String("storage.operation", "upload"),
+		attribute.Int64("storage.size_bytes", size),
+	)
+
 	start := time.Now()
 	
 	workspaceIDStr := GetContextValue(ctx, CtxKeyWorkspaceID)
@@ -154,6 +168,13 @@ func (s *defaultService) UploadObject(ctx context.Context, bucket, key string, r
 }
 
 func (s *defaultService) DownloadObject(ctx context.Context, bucket, key string) (io.ReadCloser, error) {
+	ctx, span := tracing.StartChildSpan(ctx, "StorageService.DownloadObject")
+	defer span.End()
+	span.SetAttributes(
+		attribute.String("storage.bucket", bucket),
+		attribute.String("storage.operation", "download"),
+	)
+
 	start := time.Now()
 	
 	workspaceIDStr := GetContextValue(ctx, CtxKeyWorkspaceID)
@@ -176,6 +197,13 @@ func (s *defaultService) DownloadObject(ctx context.Context, bucket, key string)
 }
 
 func (s *defaultService) DeleteObject(ctx context.Context, bucket, key string) error {
+	ctx, span := tracing.StartChildSpan(ctx, "StorageService.DeleteObject")
+	defer span.End()
+	span.SetAttributes(
+		attribute.String("storage.bucket", bucket),
+		attribute.String("storage.operation", "delete"),
+	)
+
 	start := time.Now()
 	
 	workspaceIDStr := GetContextValue(ctx, CtxKeyWorkspaceID)

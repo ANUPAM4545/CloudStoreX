@@ -1,0 +1,59 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "panels": [
+    {
+      "title": "CPU Usage (USE Utilization)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "rate(cloudstorex_cpu_usage_seconds_total[5m])",
+          "legendFormat": "CPU core usage rate"
+        }
+      ]
+    },
+    {
+      "title": "Memory Allocation Bytes (USE Saturation)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "expr": "cloudstorex_memory_alloc_bytes",
+          "legendFormat": "Allocated Memory (bytes)"
+        }
+      ]
+    },
+    {
+      "title": "Active PostgreSQL & Redis Connections (USE Saturation)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "targets": [
+        {
+          "expr": "cloudstorex_postgres_connections",
+          "legendFormat": "PostgreSQL (status: {{status}})"
+        },
+        {
+          "expr": "cloudstorex_redis_connections",
+          "legendFormat": "Redis (status: {{status}})"
+        }
+      ]
+    },
+    {
+      "title": "Active Goroutines (USE Saturation)",
+      "type": "stat",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "targets": [
+        {
+          "expr": "cloudstorex_goroutines",
+          "legendFormat": "Goroutines"
+        }
+      ]
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": ["cloudstorex", "infrastructure", "kubernetes", "use"],
+  "title": "CloudStoreX Kubernetes & Infrastructure Dashboard (USE Method)",
+  "uid": "cloudstorex-infrastructure",
+  "version": 1
+}

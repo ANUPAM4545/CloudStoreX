@@ -42,6 +42,9 @@ type Config struct {
 	AwsBucketPrefix    string `mapstructure:"AWS_BUCKET_PREFIX"`
 
 	MaxUploadSizeMB int64 `mapstructure:"MAX_UPLOAD_SIZE_MB"`
+
+	EnablePprof bool   `mapstructure:"ENABLE_PPROF"`
+	PprofToken  string `mapstructure:"PPROF_TOKEN"`
 }
 
 // LoadConfig loads configuration using standard discovery locations and environment variables.
@@ -78,6 +81,8 @@ func LoadConfigWithFile(explicitPath string) (*Config, error) {
 	v.SetDefault("AWS_BUCKET_PREFIX", "cloudstorex-")
 
 	v.SetDefault("MAX_UPLOAD_SIZE_MB", 100)
+	v.SetDefault("ENABLE_PPROF", false)
+	v.SetDefault("PPROF_TOKEN", "")
 
 	// 2. Discover and Read Configuration File (middle precedence)
 	if explicitPath != "" {

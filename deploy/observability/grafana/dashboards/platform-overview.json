@@ -1,0 +1,62 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": true,
+  "panels": [
+    {
+      "title": "API Throughput (Requests/sec - RED Rate)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum(rate(cloudstorex_http_requests_total[5m])) by (method, route)",
+          "legendFormat": "{{method}} {{route}}"
+        }
+      ]
+    },
+    {
+      "title": "HTTP Error Rate (Errors/sec - RED Errors)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum(rate(cloudstorex_http_errors_total[5m])) by (method, route, status)",
+          "legendFormat": "{{method}} {{route}} ({{status}})"
+        }
+      ]
+    },
+    {
+      "title": "Request Latency P95 (RED Duration)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(cloudstorex_http_request_duration_seconds_bucket[5m])) by (le, route))",
+          "legendFormat": "P95 {{route}}"
+        }
+      ]
+    },
+    {
+      "title": "Active API Requests (Gauge)",
+      "type": "stat",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "targets": [
+        {
+          "expr": "sum(cloudstorex_http_active_requests)",
+          "legendFormat": "Active Requests"
+        }
+      ]
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": ["cloudstorex", "platform", "red"],
+  "title": "CloudStoreX Platform Overview (RED Signals)",
+  "uid": "cloudstorex-platform-overview",
+  "version": 1
+}

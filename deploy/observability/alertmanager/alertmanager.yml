@@ -1,0 +1,41 @@
+global:
+  resolve_timeout: 5m
+
+route:
+  group_by: ['alertname', 'severity', 'provider', 'workspace']
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  receiver: 'platform-default-receiver'
+  routes:
+    - match:
+        severity: critical
+      receiver: 'pagerduty-critical'
+      repeat_interval: 1h
+    - match:
+        severity: high
+      receiver: 'slack-high-alerts'
+    - match:
+        severity: medium
+      receiver: 'slack-warning-alerts'
+
+receivers:
+  - name: 'platform-default-receiver'
+    webhook_configs:
+      - url: 'http://localhost:9090/webhook/default'
+        send_resolved: true
+
+  - name: 'pagerduty-critical'
+    webhook_configs:
+      - url: 'http://localhost:9090/webhook/pagerduty-critical'
+        send_resolved: true
+
+  - name: 'slack-high-alerts'
+    webhook_configs:
+      - url: 'http://localhost:9090/webhook/slack-high'
+        send_resolved: true
+
+  - name: 'slack-warning-alerts'
+    webhook_configs:
+      - url: 'http://localhost:9090/webhook/slack-warn'
+        send_resolved: true

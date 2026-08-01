@@ -1,0 +1,55 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "panels": [
+    {
+      "title": "Policy Engine Evaluations (evals/sec)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum(rate(cloudstorex_policy_evaluations_total[5m])) by (workspace, operation, status)",
+          "legendFormat": "{{operation}} (ws: {{workspace}} / {{status}})"
+        }
+      ]
+    },
+    {
+      "title": "Dynamic Routing Decisions by Provider & Rule",
+      "type": "piechart",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum(cloudstorex_policy_routing_decisions_total) by (provider, rule_type)",
+          "legendFormat": "{{provider}} (rule: {{rule_type}})"
+        }
+      ]
+    },
+    {
+      "title": "Policy Rule Matches by Rule Type",
+      "type": "bargauge",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "targets": [
+        {
+          "expr": "sum(rate(cloudstorex_policy_rule_matches_total[5m])) by (rule_type)",
+          "legendFormat": "Rule: {{rule_type}}"
+        }
+      ]
+    },
+    {
+      "title": "Routing Fallback Triggers (fallbacks/sec)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "targets": [
+        {
+          "expr": "sum(rate(cloudstorex_policy_fallback_routes_total[5m])) by (workspace, operation)",
+          "legendFormat": "Fallback {{operation}} (ws: {{workspace}})"
+        }
+      ]
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": ["cloudstorex", "policy", "routing"],
+  "title": "CloudStoreX Intelligent Policy Engine & Dynamic Routing",
+  "uid": "cloudstorex-policy-engine",
+  "version": 1
+}

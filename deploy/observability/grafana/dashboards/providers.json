@@ -1,0 +1,55 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "panels": [
+    {
+      "title": "AWS S3 / MinIO Provider Health Status (1=Healthy, 0=Unhealthy)",
+      "type": "stat",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "cloudstorex_provider_health_status",
+          "legendFormat": "{{provider}} ({{region}})"
+        }
+      ]
+    },
+    {
+      "title": "Provider Operation Latency P95 (seconds)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(cloudstorex_provider_latency_seconds_bucket[5m])) by (le, provider, operation))",
+          "legendFormat": "P95 {{provider}} / {{operation}}"
+        }
+      ]
+    },
+    {
+      "title": "Provider Operation Errors (Errors/sec)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "targets": [
+        {
+          "expr": "sum(rate(cloudstorex_provider_errors_total[5m])) by (provider, operation, region)",
+          "legendFormat": "{{provider}} ({{operation}} / {{region}})"
+        }
+      ]
+    },
+    {
+      "title": "Provider Request Throughput (Req/sec)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "targets": [
+        {
+          "expr": "sum(rate(cloudstorex_provider_requests_total[5m])) by (provider, operation, status)",
+          "legendFormat": "{{provider}} / {{operation}} (status: {{status}})"
+        }
+      ]
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": ["cloudstorex", "providers", "aws", "minio"],
+  "title": "CloudStoreX Storage Providers Overview",
+  "uid": "cloudstorex-providers",
+  "version": 1
+}

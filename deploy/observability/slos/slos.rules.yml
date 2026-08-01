@@ -1,0 +1,68 @@
+groups:
+  - name: cloudstorex_slo_burn_rate_alerts
+    rules:
+      # 1. API Availability SLO - Fast Burn (14.4x burn rate -> exhausts 30d budget in 2 days)
+      - alert: CloudStoreXAPIErrorBudgetFastBurn
+        expr: |
+          (
+            sum(rate(cloudstorex_http_errors_total{status=~"5.."}[1h]))
+            /
+            sum(rate(cloudstorex_http_requests_total[1h]))
+          ) > (14.4 * 0.001)
+          and
+          (
+            sum(rate(cloudstorex_http_errors_total{status=~"5.."}[5m]))
+            /
+            sum(rate(cloudstorex_http_requests_total[5m]))
+          ) > (14.4 * 0.001)
+        for: 2m
+        labels:
+          severity: critical
+          slo: api-availability
+          window: 30d
+        annotations:
+          summary: "Fast error budget burn rate (14.4x) for API Availability"
+          description: "CloudStoreX is consuming its 30-day error budget at a rate that will exhaust it in < 48 hours."
+          runbook_url: "https://github.com/cloudstorex/docs/sre/runbooks.md#2-httphigherrorratecritical-critical"
+
+      # 2. API Availability SLO - Slow Burn (6x burn rate -> exhausts 30d budget in 5 days)
+      - alert: CloudStoreXAPIErrorBudgetSlowBurn
+        expr: |
+          (
+            sum(rate(cloudstorex_http_errors_total{status=~"5.."}[6h]))
+            /
+            sum(rate(cloudstorex_http_requests_total[6h]))
+          ) > (6 * 0.001)
+          and
+          (
+            sum(rate(cloudstorex_http_errors_total{status=~"5.."}[30m]))
+            /
+            sum(rate(cloudstorex_http_requests_total[30m]))
+          ) > (6 * 0.001)
+        for: 15m
+        labels:
+          severity: high
+          slo: api-availability
+          window: 30d
+        annotations:
+          summary: "Slow error budget burn rate (6x) for API Availability"
+          description: "CloudStoreX is consuming its 30-day error budget at a rate that will exhaust it in < 5 days."
+          runbook_url: "https://github.com/cloudstorex/docs/sre/runbooks.md#2-httphigherrorratecritical-critical"
+
+      # 3. Provider Availability SLO - Fast Burn
+      - alert: CloudStoreXProviderErrorBudgetFastBurn
+        expr: |
+          (
+            sum(rate(cloudstorex_provider_errors_total[1h]))
+            /
+            sum(rate(cloudstorex_provider_requests_total[1h]))
+          ) > (14.4 * 0.0005)
+        for: 5m
+        labels:
+          severity: critical
+          slo: provider-availability
+          window: 30d
+        annotations:
+          summary: "Fast error budget burn rate for Storage Providers"
+          description: "Storage provider operations are experiencing elevated failure rates."
+          runbook_url: "https://github.com/cloudstorex/docs/sre/runbooks.md#1-storageproviderunreachable-critical"

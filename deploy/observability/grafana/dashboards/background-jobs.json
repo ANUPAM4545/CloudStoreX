@@ -1,0 +1,59 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "panels": [
+    {
+      "title": "Background Job Queue Depth",
+      "type": "stat",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "cloudstorex_jobs_queue_depth",
+          "legendFormat": "Queue: {{queue}}"
+        }
+      ]
+    },
+    {
+      "title": "Running Jobs by Type",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "expr": "cloudstorex_jobs_running",
+          "legendFormat": "{{job_type}}"
+        }
+      ]
+    },
+    {
+      "title": "Completed Jobs vs Failed Jobs (rate)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "targets": [
+        {
+          "expr": "sum(rate(cloudstorex_jobs_completed_total[5m])) by (job_type, status)",
+          "legendFormat": "Completed {{job_type}} ({{status}})"
+        },
+        {
+          "expr": "sum(rate(cloudstorex_jobs_failed_total[5m])) by (job_type)",
+          "legendFormat": "Failed {{job_type}}"
+        }
+      ]
+    },
+    {
+      "title": "Job Retry Count Rate (retries/sec)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "targets": [
+        {
+          "expr": "sum(rate(cloudstorex_jobs_retry_count_total[5m])) by (job_type)",
+          "legendFormat": "Retries: {{job_type}}"
+        }
+      ]
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": ["cloudstorex", "jobs", "workers", "lifecycle"],
+  "title": "CloudStoreX Background Jobs & Lifecycle Workers",
+  "uid": "cloudstorex-background-jobs",
+  "version": 1
+}

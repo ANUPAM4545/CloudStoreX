@@ -1,0 +1,55 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "panels": [
+    {
+      "title": "Total Multi-Workspace Storage Adoption (Bytes by Provider)",
+      "type": "piechart",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum(cloudstorex_storage_upload_bytes_total) by (provider)",
+          "legendFormat": "Provider: {{provider}}"
+        }
+      ]
+    },
+    {
+      "title": "Active Tenants & Workspaces Using Storage",
+      "type": "stat",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "expr": "count(sum(cloudstorex_storage_uploads_total) by (workspace))",
+          "legendFormat": "Active Workspaces"
+        }
+      ]
+    },
+    {
+      "title": "Provider Cost & Routing Efficiency (% Routed to MinIO vs AWS S3)",
+      "type": "bargauge",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "targets": [
+        {
+          "expr": "sum(cloudstorex_policy_routing_decisions_total) by (provider) / sum(cloudstorex_policy_routing_decisions_total) * 100",
+          "legendFormat": "Routing Share: {{provider}} (%)"
+        }
+      ]
+    },
+    {
+      "title": "Storage Growth Rate Across All Workspaces (MB/sec)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "targets": [
+        {
+          "expr": "sum(rate(cloudstorex_storage_upload_bytes_total[5m])) by (workspace) / 1048576",
+          "legendFormat": "Workspace: {{workspace}} (MB/s)"
+        }
+      ]
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": ["cloudstorex", "business", "platform", "kpis"],
+  "title": "CloudStoreX Business & Platform Executive Dashboard",
+  "uid": "cloudstorex-business-platform",
+  "version": 1
+}

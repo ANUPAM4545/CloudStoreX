@@ -1,0 +1,59 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "panels": [
+    {
+      "title": "Upload Rate (ops/sec)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum(rate(cloudstorex_storage_uploads_total[5m])) by (workspace, provider, bucket)",
+          "legendFormat": "{{provider}} / {{bucket}} ({{workspace}})"
+        }
+      ]
+    },
+    {
+      "title": "Download Rate (ops/sec)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum(rate(cloudstorex_storage_downloads_total[5m])) by (workspace, provider, bucket)",
+          "legendFormat": "{{provider}} / {{bucket}} ({{workspace}})"
+        }
+      ]
+    },
+    {
+      "title": "Storage Growth (Bytes Uploaded/Downloaded)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "targets": [
+        {
+          "expr": "sum(rate(cloudstorex_storage_upload_bytes_total[5m])) by (provider)",
+          "legendFormat": "Upload rate {{provider}} (bytes/s)"
+        },
+        {
+          "expr": "sum(rate(cloudstorex_storage_download_bytes_total[5m])) by (provider)",
+          "legendFormat": "Download rate {{provider}} (bytes/s)"
+        }
+      ]
+    },
+    {
+      "title": "Object Catalog Size by Workspace/Bucket",
+      "type": "stat",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "targets": [
+        {
+          "expr": "sum(cloudstorex_metadata_object_catalog_size) by (workspace, bucket)",
+          "legendFormat": "{{bucket}} (ws: {{workspace}})"
+        }
+      ]
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": ["cloudstorex", "storage", "objects"],
+  "title": "CloudStoreX Storage Overview",
+  "uid": "cloudstorex-storage",
+  "version": 1
+}

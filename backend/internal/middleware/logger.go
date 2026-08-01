@@ -26,9 +26,15 @@ func RequestLogger() gin.HandlerFunc {
 		latency := end.Sub(start)
 
 		userID, _ := c.Get("user_id")
+		traceID, _ := c.Get("trace_id")
+		spanID, _ := c.Get("span_id")
+		workspaceID, _ := c.Get("workspace_id")
 
 		logger.Log.Info("HTTP Request",
 			slog.String("request_id", requestID),
+			slog.Any("trace_id", traceID),
+			slog.Any("span_id", spanID),
+			slog.Any("workspace_id", workspaceID),
 			slog.Any("user_id", userID),
 			slog.String("method", c.Request.Method),
 			slog.String("path", path),

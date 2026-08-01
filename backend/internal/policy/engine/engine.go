@@ -4,8 +4,10 @@ import (
 	"context"
 	"time"
 
+	"github.com/cloudstorex/backend/internal/observability/tracing"
 	"github.com/cloudstorex/backend/internal/policy/events"
 	"github.com/cloudstorex/backend/internal/policy/model"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 // PolicyRepository defines the subset of repository methods needed by the engine.
@@ -41,6 +43,9 @@ func NewPolicyEngine(repo PolicyRepository, evaluator Evaluator, resolver Defaul
 }
 
 func (e *defaultPolicyEngine) Resolve(ctx context.Context, evalCtx *model.EvaluationContext, op string) (string, *model.RoutingDecision, error) {
+	ctx, span := tracing.StartChildSpan(ctx, "PolicyEngine.Resolve")
+	defer span.End()
+
 	start := time.Now()
 	
 	decision := &model.RoutingDecision{
@@ -88,6 +93,13 @@ func (e *defaultPolicyEngine) Resolve(ctx context.Context, evalCtx *model.Evalua
 
 	decision.ProviderID = finalProviderID
 	decision.LatencyMs = time.Since(start).Milliseconds()
+
+	span.SetAttributes(
+		attribute.String("policy.workspace_id", evalCtx.WorkspaceID.String()),
+		attribute.String("policy.operation", op),
+		attribute.String("policy.provider_id", finalProviderID),
+		attribute.Bool("policy.is_fallback", decision.IsFallback),
+	)
 
 	// 4. Async Audit Log Emission
 	_ = e.eventPub.PublishRoutingDecision(context.Background(), decision)

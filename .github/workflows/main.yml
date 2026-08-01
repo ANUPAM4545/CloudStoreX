@@ -32,7 +32,7 @@ jobs:
 
       - name: Build Docker Image (Local Tag for Scan)
         id: docker_build
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v7
         with:
           context: ./${{ matrix.component }}
           file: ./${{ matrix.component }}/Dockerfile
@@ -60,7 +60,7 @@ jobs:
           severity: 'CRITICAL,HIGH'
 
       - name: Push Docker Image to GHCR
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v7
         with:
           context: ./${{ matrix.component }}
           file: ./${{ matrix.component }}/Dockerfile

@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cloudstorex-config
+  labels:
+    app.kubernetes.io/name: cloudstorex
+    app.kubernetes.io/component: config
+data:
+  APP_ENV: "production"
+  PORT: "8080"
+  DB_HOST: "cloudstorex-postgres"
+  DB_PORT: "5432"
+  DB_NAME: "cloudstorex"
+  DB_USER: "cloudstorex"
+  REDIS_HOST: "cloudstorex-redis"
+  REDIS_PORT: "6379"
+  MINIO_ENDPOINT: "cloudstorex-minio:9000"
+  MINIO_BUCKET: "cloudstorex-default"
+  MINIO_USE_SSL: "false"
+  CORS_ALLOWED_ORIGINS: "*"
+  MAX_UPLOAD_SIZE_MB: "500"

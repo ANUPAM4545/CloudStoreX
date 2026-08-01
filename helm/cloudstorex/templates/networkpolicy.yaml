@@ -1,0 +1,33 @@
+{{- if .Values.networkPolicy.enabled -}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "cloudstorex.fullname" . }}-network-policy
+  labels:
+    {{- include "cloudstorex.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector: {}
+        - podSelector: {}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.backend.service.port }}
+        - protocol: TCP
+          port: {{ .Values.frontend.service.port }}
+        {{- if .Values.postgresql.enabled }}
+        - protocol: TCP
+          port: {{ .Values.postgresql.service.port }}
+        {{- end }}
+        {{- if .Values.redis.enabled }}
+        - protocol: TCP
+          port: {{ .Values.redis.service.port }}
+        {{- end }}
+        {{- if .Values.minio.enabled }}
+        - protocol: TCP
+          port: {{ .Values.minio.service.apiPort }}
+        {{- end }}
+{{- end }}

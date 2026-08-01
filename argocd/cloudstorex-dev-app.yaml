@@ -1,0 +1,23 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: cloudstorex-dev
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: cloudstorex
+    app.kubernetes.io/component: gitops
+spec:
+  project: default
+  source:
+    repoURL: 'https://github.com/cloudstorex/cloudstorex.git'
+    targetRevision: HEAD
+    path: deploy/kubernetes/overlays/development
+  destination:
+    server: 'https://kubernetes.default.svc'
+    namespace: cloudstorex-dev
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

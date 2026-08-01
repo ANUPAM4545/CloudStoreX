@@ -1,0 +1,9 @@
+apiVersion: v2
+name: cloudstorex
+description: CloudStoreX Multi-Cloud Storage Control Plane & Enterprise Object Services
+type: application
+version: 1.11.0
+appVersion: "1.11.0"
+maintainers:
+  - name: cloudstorex-team
+    email: platform@cloudstorex.company.com

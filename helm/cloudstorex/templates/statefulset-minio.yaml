@@ -1,0 +1,63 @@
+{{- if .Values.minio.enabled -}}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "cloudstorex.fullname" . }}-minio
+  labels:
+    {{- include "cloudstorex.labels" . | nindent 4 }}
+    app.kubernetes.io/component: minio
+spec:
+  serviceName: {{ include "cloudstorex.fullname" . }}-minio
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "cloudstorex.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: minio
+  template:
+    metadata:
+      labels:
+        {{- include "cloudstorex.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: minio
+    spec:
+      containers:
+        - name: minio
+          image: {{ .Values.minio.image }}
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/sh
+            - -c
+            - "mkdir -p /data/{{ .Values.minio.defaultBucket }} && minio server /data --console-address :9001"
+          ports:
+            - name: api
+              containerPort: 9000
+            - name: console
+              containerPort: 9001
+          env:
+            - name: MINIO_ROOT_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "cloudstorex.fullname" . }}-secret
+                  key: MINIO_ACCESS_KEY
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "cloudstorex.fullname" . }}-secret
+                  key: MINIO_SECRET_KEY
+          volumeMounts:
+            - name: miniodata
+              mountPath: /data
+  {{- if .Values.minio.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: miniodata
+      spec:
+        accessModes: [ "ReadWriteOnce" ]
+        resources:
+          requests:
+            storage: {{ .Values.minio.persistence.size }}
+  {{- else }}
+      volumes:
+        - name: miniodata
+          emptyDir: {}
+  {{- end }}
+{{- end }}

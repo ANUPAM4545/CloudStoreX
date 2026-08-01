@@ -1,0 +1,13 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: cloudstorex-backend-pdb
+  labels:
+    app.kubernetes.io/name: cloudstorex
+    app.kubernetes.io/component: backend
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: cloudstorex
+      app.kubernetes.io/component: backend

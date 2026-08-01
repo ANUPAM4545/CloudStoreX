@@ -1,25 +1,30 @@
-# Security Policy
-
-The CloudStoreX engineering team takes security and data privacy seriously.
+# Security Policy – CloudStoreX
 
 ## Supported Versions
 
-Currently supported releases for security updates:
-
-| Version | Supported | Notes |
-|---|---|---|
-| `v0.1.x-alpha` | :white_check_mark: | Alpha (Active Development) Release |
+| Version | Supported          |
+| ------- | ------------------ |
+| 1.11.x  | :white_check_mark: |
+| < 1.10  | :x:                |
 
 ## Reporting a Vulnerability
 
-If you discover a potential security vulnerability in CloudStoreX, **please do not open a public GitHub issue**.
+We take the security of CloudStoreX and its multi-cloud storage control plane seriously.
 
-Instead, email your findings privately to `security@cloudstorex.com`.
+If you discover a security vulnerability within CloudStoreX, please follow these steps:
+1. **Do not disclose publicly**: Do not create a public GitHub Issue for potential vulnerabilities.
+2. **Contact Security Team**: Email `security@cloudstorex.company.com` with:
+   - A description of the vulnerability and its potential impact.
+   - Detailed steps to reproduce the issue (proof-of-concept scripts or HTTP traces are appreciated).
+   - Any suggested mitigations.
+3. **Response Timeline**:
+   - You will receive an acknowledgment within **24 hours**.
+   - A preliminary assessment and remediation plan will be provided within **5 business days**.
 
-We pledge to:
-- Acknowledge receipt of your vulnerability report within 48 hours.
-- Provide regular updates on our progress in reproducing and patching the vulnerability.
-- Request public disclosure only after a patch release has been published.
-
-## Secure AI Framework (SAIF) Compliance
-CloudStoreX adheres to Google Secure AI Framework (SAIF) principles for data orchestration, ensuring tenant isolation, least-privilege credentials, and encrypted transport across provider boundaries.
+## Security Hardening Practices
+CloudStoreX enforces strict security practices across its deployment lifecycle:
+- **Non-Root Container Execution**: All container images run as unprivileged non-root users (`65532` or `1001`).
+- **Minimal Runtime Images**: Backend runs on Google Distroless static images without shells or package managers.
+- **Automated Scanning**: CI/CD pipelines run SBOM generation (Syft) and vulnerability scanning (Trivy) on every build.
+- **Image Signing**: All published images are signed via Sigstore Cosign.
+- **Network Isolation**: Default Kubernetes NetworkPolicies restrict inter-pod communication and deny unauthorized ingress.

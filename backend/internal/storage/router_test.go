@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cloudstorex/backend/internal/policy"
+	"github.com/cloudstorex/backend/internal/policy/model"
 )
 
 // mockRegistry implements ProviderRegistry for testing.
@@ -64,8 +64,12 @@ func (m *mockProvider) DeleteBucket(ctx context.Context, bucket string) error { 
 func (m *mockProvider) ListBuckets(ctx context.Context) ([]*Bucket, error) {
 	return []*Bucket{{Name: "test-bucket"}}, nil
 }
-func (m *mockProvider) GeneratePresignedURL(ctx context.Context, bucket, key string, expiration time.Duration) (string, error) {
-	return "http://presigned-url", nil
+func (m *mockProvider) GeneratePresignedUploadURL(ctx context.Context, bucket, key string, expiration time.Duration) (string, error) {
+	return "http://presigned-upload", nil
+}
+
+func (m *mockProvider) GeneratePresignedDownloadURL(ctx context.Context, bucket, key string, expiration time.Duration) (string, error) {
+	return "http://presigned-download", nil
 }
 func (m *mockProvider) CopyObject(ctx context.Context, srcBucket, srcKey, destBucket, destKey string) (*StorageResponse, error) {
 	return nil, nil
@@ -101,16 +105,16 @@ func (m *mockProvider) ListObjectVersions(ctx context.Context, bucket, key strin
 	return nil, nil
 }
 
-type mockResolver struct {
+type mockPolicyEngine struct {
 	id string
 }
 
-func (m mockResolver) GetDefaultProviderID(ctx context.Context, workspaceID string) (string, error) {
-	return m.id, nil
+func (m mockPolicyEngine) Resolve(ctx context.Context, evalCtx *model.EvaluationContext, op string) (string, *model.RoutingDecision, error) {
+	return m.id, nil, nil
 }
 
 func TestRouter_Upload(t *testing.T) {
-	evaluator := policy.NewDefaultEvaluator(mockResolver{id: "test-provider"})
+	evaluator := mockPolicyEngine{id: "test-provider"}
 	mockProv := &mockProvider{}
 	registry := &mockRegistry{
 		providers: map[string]StorageProvider{"test-provider": mockProv},
@@ -128,7 +132,7 @@ func TestRouter_Upload(t *testing.T) {
 }
 
 func TestRouter_ProviderNotFound(t *testing.T) {
-	evaluator := policy.NewDefaultEvaluator(mockResolver{id: "missing-provider"})
+	evaluator := mockPolicyEngine{id: "missing-provider"}
 	registry := &mockRegistry{
 		providers: map[string]StorageProvider{},
 	}

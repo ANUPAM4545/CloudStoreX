@@ -36,14 +36,20 @@ type Object struct {
 	StorageClass      string         `gorm:"type:varchar(50);default:'STANDARD'"`
 	Status            string         `gorm:"type:varchar(50);index;default:'ACTIVE'"` // ACTIVE, UPLOADING, ERROR
 	IsDeleted         bool           `gorm:"default:false;index"`                     // Soft-delete flag
-	CreatedAt         time.Time      `gorm:"autoCreateTime;index"`
-	UpdatedAt         time.Time      `gorm:"autoUpdateTime"`
-	DeletedAt         gorm.DeletedAt `gorm:"index"`
+	TrashTimestamp    *time.Time     `gorm:"index"`
 
 	// Relationships
 	Bucket   Bucket           `gorm:"foreignKey:BucketID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE;"`
-	Tags     []ObjectTag      `gorm:"foreignKey:ObjectID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE;"`
-	Metadata []ObjectMetadata `gorm:"foreignKey:ObjectID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE;"`
+	Tags              []ObjectTag       `gorm:"foreignKey:ObjectID;constraint:OnDelete:CASCADE" json:"tags"`
+	Metadata          []ObjectMetadata  `gorm:"foreignKey:ObjectID;constraint:OnDelete:CASCADE" json:"metadata"`
+	Versions          []ObjectVersion   `gorm:"foreignKey:ObjectID;constraint:OnDelete:CASCADE" json:"versions"`
+	CreatedAt         time.Time         `gorm:"autoCreateTime;index" json:"created_at"`
+	UpdatedAt         time.Time         `gorm:"autoUpdateTime" json:"updated_at"`
+	DeletedAt         *time.Time        `gorm:"index" json:"deleted_at,omitempty"` // Soft delete
+
+	// Retention & Compliance
+	RetainUntil *time.Time `gorm:"index"`
+	LegalHold   bool       `gorm:"not null;default:false"`
 }
 
 // ObjectTag represents user-defined key-value tags for an object.

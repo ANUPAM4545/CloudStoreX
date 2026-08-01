@@ -19,6 +19,12 @@ const (
 	EventBucketCreated    EventType = "BucketCreated"
 	EventBucketDeleted    EventType = "BucketDeleted"
 	EventMetadataSync     EventType = "MetadataSync"
+
+	EventRetentionApplied  EventType = "RetentionApplied"
+	EventLegalHoldEnabled  EventType = "LegalHoldEnabled"
+	EventLegalHoldReleased EventType = "LegalHoldReleased"
+	EventQuotaExceeded     EventType = "QuotaExceeded"
+	EventLifecycleExpired  EventType = "LifecycleExpired"
 )
 
 // Event payload encapsulates the lifecycle event.

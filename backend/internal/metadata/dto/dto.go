@@ -42,3 +42,16 @@ type ObjectMetaDTO struct {
 	CreatedAt         time.Time         `json:"created_at"`
 	UpdatedAt         time.Time         `json:"updated_at"`
 }
+
+// ObjectVersionDTO represents a specific version of an object.
+type ObjectVersionDTO struct {
+	ID                string    `json:"id"`
+	ObjectID          string    `json:"object_id"`
+	VersionNumber     int       `json:"version_number"`
+	ProviderID        string    `json:"provider_id"`
+	ProviderObjectKey string    `json:"provider_object_key"`
+	SizeBytes         int64     `json:"size_bytes"`
+	ETag              string    `json:"etag"`
+	IsCurrent         bool      `json:"is_current"`
+	CreatedAt         time.Time `json:"created_at"`
+}

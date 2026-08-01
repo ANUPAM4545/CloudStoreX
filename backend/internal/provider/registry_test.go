@@ -30,7 +30,11 @@ func (m *MockProvider) DeleteBucket(ctx context.Context, bucket string) error { 
 func (m *MockProvider) ListBuckets(ctx context.Context) ([]*storage.Bucket, error) {
 	return []*storage.Bucket{{Name: "mock-bucket"}}, nil
 }
-func (m *MockProvider) GeneratePresignedURL(ctx context.Context, bucket, key string, expiration time.Duration) (string, error) {
+func (m *MockProvider) GeneratePresignedUploadURL(ctx context.Context, bucket, key string, expiration time.Duration) (string, error) {
+	return "", nil
+}
+
+func (m *MockProvider) GeneratePresignedDownloadURL(ctx context.Context, bucket, key string, expiration time.Duration) (string, error) {
 	return "http://mock-url", nil
 }
 func (m *MockProvider) CopyObject(ctx context.Context, srcBucket, srcKey, destBucket, destKey string) (*storage.StorageResponse, error) {

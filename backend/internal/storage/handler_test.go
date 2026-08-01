@@ -101,8 +101,12 @@ func (m *mockService) ListBuckets(ctx context.Context) ([]*Bucket, error) {
 	return list, nil
 }
 
-func (m *mockService) GeneratePresignedURL(ctx context.Context, bucket, key string, expiration time.Duration) (string, error) {
-	return "http://presigned-url/" + bucket + "/" + key, nil
+func (m *mockService) GeneratePresignedUploadURL(ctx context.Context, bucket, key string, expiration time.Duration) (string, error) {
+	return "http://presigned-upload", nil
+}
+
+func (m *mockService) GeneratePresignedDownloadURL(ctx context.Context, bucket, key string, expiration time.Duration) (string, error) {
+	return "http://presigned-download", nil
 }
 
 func (m *mockService) SearchObjects(ctx context.Context, query dto.SearchQuery) ([]dto.ObjectMetaDTO, int64, error) {
@@ -122,6 +126,14 @@ func (m *mockService) TagObject(ctx context.Context, id string, tags map[string]
 }
 
 func (m *mockService) UntagObject(ctx context.Context, id string, keys []string) error {
+	return nil
+}
+
+func (m *mockService) ListObjectVersions(ctx context.Context, id string) ([]dto.ObjectVersionDTO, error) {
+	return nil, nil
+}
+
+func (m *mockService) RestoreObject(ctx context.Context, id string) error {
 	return nil
 }
 

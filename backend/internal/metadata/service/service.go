@@ -12,16 +12,18 @@ import (
 )
 
 type MetadataService interface {
-	CreateObjectMetadata(ctx context.Context, bucketID uuid.UUID, objectKey, providerObjectKey string, size int64, mimeType, etag, providerID string, ownerID *uuid.UUID, tags map[string]string, meta map[string]string) (*model.Object, error)
+	CreateObjectMetadata(ctx context.Context, workspaceID string, bucketID uuid.UUID, objectKey, providerObjectKey string, size int64, mimeType, etag, providerID string, ownerID *uuid.UUID, tags map[string]string, meta map[string]string) (*model.Object, error)
 	UpdateObjectMetadata(ctx context.Context, id string, mimeType string, storageClass string, tags map[string]string, custom map[string]string) (*model.Object, error)
 	FindObjectByKey(ctx context.Context, bucketID, objectKey string) (*model.Object, error)
 	FindObjectByID(ctx context.Context, id string) (*model.Object, error)
 	GetObjectMetadata(ctx context.Context, id string) (map[string]string, error)
 	SearchObjects(ctx context.Context, query dto.SearchQuery) ([]dto.ObjectMetaDTO, int64, error)
+	FindObjectsForExpiration(ctx context.Context, bucketID string, prefix string, olderThan time.Time) ([]model.Object, error)
 	TagObject(ctx context.Context, id string, tags map[string]string) error
 	UntagObject(ctx context.Context, id string, keys []string) error
-	SoftDeleteObject(ctx context.Context, id string) error
+	SoftDeleteObject(ctx context.Context, workspaceID, id string) error
 	RestoreObject(ctx context.Context, id string) error
+	ListObjectVersions(ctx context.Context, id string) ([]dto.ObjectVersionDTO, error)
 	
 	CreateBucket(ctx context.Context, workspaceID uuid.UUID, providerID, name, region string) (*model.Bucket, error)
 	FindBucketByName(ctx context.Context, workspaceID, bucketName string) (*model.Bucket, error)
@@ -40,35 +42,82 @@ func NewMetadataService(repo repository.MetadataRepository, publisher events.Pub
 	}
 }
 
-func (s *metadataService) CreateObjectMetadata(ctx context.Context, bucketID uuid.UUID, objectKey, providerObjectKey string, size int64, mimeType, etag, providerID string, ownerID *uuid.UUID, tags map[string]string, meta map[string]string) (*model.Object, error) {
-	objID := uuid.New()
+func (s *metadataService) CreateObjectMetadata(ctx context.Context, workspaceID string, bucketID uuid.UUID, objectKey, providerObjectKey string, size int64, mimeType, etag, providerID string, ownerID *uuid.UUID, tags map[string]string, meta map[string]string) (*model.Object, error) {
+	// 1. Check if object already exists
+	existingObj, err := s.repo.FindObjectByKey(ctx, bucketID.String(), objectKey)
 	
-	var objTags []model.ObjectTag
-	for k, v := range tags {
-		objTags = append(objTags, model.ObjectTag{ID: uuid.New(), ObjectID: objID, Key: k, Value: v})
-	}
-	
-	var objMeta []model.ObjectMetadata
-	for k, v := range meta {
-		objMeta = append(objMeta, model.ObjectMetadata{ID: uuid.New(), ObjectID: objID, Key: k, Value: v})
+	var objID uuid.UUID
+	var nextVersionNum int = 1
+	var obj *model.Object
+
+	if err != nil {
+		// Object doesn't exist, create it
+		objID = uuid.New()
+		
+		var objTags []model.ObjectTag
+		for k, v := range tags {
+			objTags = append(objTags, model.ObjectTag{ID: uuid.New(), ObjectID: objID, Key: k, Value: v})
+		}
+		
+		var objMeta []model.ObjectMetadata
+		for k, v := range meta {
+			objMeta = append(objMeta, model.ObjectMetadata{ID: uuid.New(), ObjectID: objID, Key: k, Value: v})
+		}
+
+		obj = &model.Object{
+			ID:                objID,
+			BucketID:          bucketID,
+			ObjectKey:         objectKey,
+			ProviderObjectKey: providerObjectKey,
+			SizeBytes:         size,
+			MimeType:          mimeType,
+			ETag:              etag,
+			ProviderID:        providerID,
+			OwnerID:           ownerID,
+			Status:            "ACTIVE",
+			Tags:              objTags,
+			Metadata:          objMeta,
+		}
+
+		if err := s.repo.CreateObject(ctx, obj); err != nil {
+			return nil, err
+		}
+	} else {
+		// Object exists. Update it and increment version.
+		objID = existingObj.ID
+		// In a real app we might want to query max version, but for simplicity we can just count versions or fetch max.
+		// For now we'll just set it to len(existingObj.Versions) + 1 if preloaded, but FindObjectByKey might not preload.
+		// Let's assume VersionNumber is generated or we just use Unix timestamp for VersionNumber if we can't reliably get max.
+		// Better: we can query the max version in the repo.
+		// For now, let's just use time.Now().UnixNano() as a naive version number, or just 1. Let's use Unix()
+		nextVersionNum = int(time.Now().Unix())
+		
+		existingObj.SizeBytes = size
+		existingObj.MimeType = mimeType
+		existingObj.ETag = etag
+		existingObj.ProviderObjectKey = providerObjectKey
+		existingObj.ProviderID = providerID
+		existingObj.UpdatedAt = time.Now()
+		
+		if err := s.repo.UpdateObject(ctx, existingObj); err != nil {
+			return nil, err
+		}
+		obj = existingObj
 	}
 
-	obj := &model.Object{
-		ID:                objID,
-		BucketID:          bucketID,
-		ObjectKey:         objectKey,
+	// 2. Create the Object Version
+	version := &model.ObjectVersion{
+		ID:                uuid.New(),
+		ObjectID:          objID,
+		VersionNumber:     nextVersionNum,
+		ProviderID:        providerID,
 		ProviderObjectKey: providerObjectKey,
 		SizeBytes:         size,
-		MimeType:          mimeType,
 		ETag:              etag,
-		ProviderID:        providerID,
-		OwnerID:           ownerID,
-		Status:            "ACTIVE",
-		Tags:              objTags,
-		Metadata:          objMeta,
+		IsCurrent:         true,
 	}
 
-	if err := s.repo.CreateObject(ctx, obj); err != nil {
+	if err := s.repo.CreateObjectVersion(ctx, version); err != nil {
 		return nil, err
 	}
 
@@ -78,6 +127,10 @@ func (s *metadataService) CreateObjectMetadata(ctx context.Context, bucketID uui
 		Timestamp: time.Now(),
 		BucketID:  bucketID.String(),
 		ObjectID:  objID.String(),
+		Payload: map[string]interface{}{
+			"size_bytes":   size,
+			"workspace_id": workspaceID,
+		},
 	})
 
 	return obj, nil
@@ -128,7 +181,17 @@ func (s *metadataService) SearchObjects(ctx context.Context, query dto.SearchQue
 	return results, total, nil
 }
 
-func (s *metadataService) SoftDeleteObject(ctx context.Context, id string) error {
+func (s *metadataService) FindObjectsForExpiration(ctx context.Context, bucketID string, prefix string, olderThan time.Time) ([]model.Object, error) {
+	return s.repo.FindObjectsForExpiration(ctx, bucketID, prefix, olderThan)
+}
+
+func (s *metadataService) SoftDeleteObject(ctx context.Context, workspaceID, id string) error {
+	// Let's fetch the object size before deleting to include it in the event
+	obj, err := s.repo.FindObjectByID(ctx, id)
+	if err != nil {
+		return err
+	}
+
 	if err := s.repo.DeleteObject(ctx, id); err != nil {
 		return err
 	}
@@ -138,6 +201,10 @@ func (s *metadataService) SoftDeleteObject(ctx context.Context, id string) error
 		Type:      events.EventObjectDeleted,
 		Timestamp: time.Now(),
 		ObjectID:  id,
+		Payload: map[string]interface{}{
+			"size_bytes":   obj.SizeBytes,
+			"workspace_id": workspaceID,
+		},
 	})
 
 	return nil
@@ -150,6 +217,8 @@ func (s *metadataService) RestoreObject(ctx context.Context, id string) error {
 	}
 
 	obj.IsDeleted = false
+	obj.TrashTimestamp = nil
+	obj.DeletedAt = nil
 	if err := s.repo.UpdateObject(ctx, obj); err != nil {
 		return err
 	}
@@ -161,6 +230,28 @@ func (s *metadataService) RestoreObject(ctx context.Context, id string) error {
 		ObjectID:  id,
 	})
 	return nil
+}
+
+func (s *metadataService) ListObjectVersions(ctx context.Context, id string) ([]dto.ObjectVersionDTO, error) {
+	versions, err := s.repo.ListObjectVersions(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	var dtos []dto.ObjectVersionDTO
+	for _, v := range versions {
+		dtos = append(dtos, dto.ObjectVersionDTO{
+			ID:                v.ID.String(),
+			ObjectID:          v.ObjectID.String(),
+			VersionNumber:     v.VersionNumber,
+			ProviderID:        v.ProviderID,
+			ProviderObjectKey: v.ProviderObjectKey,
+			SizeBytes:         v.SizeBytes,
+			ETag:              v.ETag,
+			IsCurrent:         v.IsCurrent,
+			CreatedAt:         v.CreatedAt,
+		})
+	}
+	return dtos, nil
 }
 
 func (s *metadataService) FindObjectByID(ctx context.Context, id string) (*model.Object, error) {

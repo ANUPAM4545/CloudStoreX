@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"time"
 	"github.com/cloudstorex/backend/internal/metadata/dto"
 	"github.com/cloudstorex/backend/internal/metadata/model"
 	"github.com/google/uuid"
@@ -9,7 +10,11 @@ import (
 
 type mockMetadataService struct{}
 
-func (m *mockMetadataService) CreateObjectMetadata(ctx context.Context, bucketID uuid.UUID, objectKey, providerObjectKey string, size int64, mimeType, etag, providerID string, ownerID *uuid.UUID, tags map[string]string, meta map[string]string) (*model.Object, error) {
+func (m *mockMetadataService) ListObjectVersions(ctx context.Context, id string) ([]dto.ObjectVersionDTO, error) {
+	return nil, nil
+}
+
+func (m *mockMetadataService) CreateObjectMetadata(ctx context.Context, workspaceID string, bucketID uuid.UUID, objectKey, providerObjectKey string, size int64, mimeType, etag, providerID string, ownerID *uuid.UUID, tags map[string]string, meta map[string]string) (*model.Object, error) {
 	return &model.Object{ID: uuid.New(), ObjectKey: objectKey}, nil
 }
 func (m *mockMetadataService) UpdateObjectMetadata(ctx context.Context, id string, mimeType string, storageClass string, tags map[string]string, custom map[string]string) (*model.Object, error) {
@@ -33,11 +38,14 @@ func (m *mockMetadataService) TagObject(ctx context.Context, id string, tags map
 func (m *mockMetadataService) UntagObject(ctx context.Context, id string, keys []string) error {
 	return nil
 }
-func (m *mockMetadataService) SoftDeleteObject(ctx context.Context, id string) error {
+func (m *mockMetadataService) SoftDeleteObject(ctx context.Context, workspaceID, id string) error {
 	return nil
 }
 func (m *mockMetadataService) RestoreObject(ctx context.Context, id string) error {
 	return nil
+}
+func (m *mockMetadataService) FindObjectsForExpiration(ctx context.Context, bucketID string, prefix string, olderThan time.Time) ([]model.Object, error) {
+	return nil, nil
 }
 func (m *mockMetadataService) CreateBucket(ctx context.Context, workspaceID uuid.UUID, providerID, name, region string) (*model.Bucket, error) {
 	return nil, nil

@@ -6,13 +6,15 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 
 	"github.com/cloudstorex/backend/internal/metadata/dto"
 	"github.com/cloudstorex/backend/internal/metadata/model"
-	"github.com/cloudstorex/backend/internal/policy"
+	policyModel "github.com/cloudstorex/backend/internal/policy/model"
 	"github.com/google/uuid"
 	"github.com/cloudstorex/backend/internal/provider"
 	"github.com/cloudstorex/backend/internal/storage"
@@ -29,8 +31,16 @@ type mockMinIOClient struct {
 	listFunc      func(ctx context.Context, bucket string, opts minio.ListObjectsOptions) <-chan minio.ObjectInfo
 	makeBucket      func(ctx context.Context, bucket string, opts minio.MakeBucketOptions) error
 	bucketExists    func(ctx context.Context, bucket string) (bool, error)
-	listBucketsFunc func(ctx context.Context) ([]minio.BucketInfo, error)
-	objects         map[string]map[string][]byte // bucket -> key -> data
+	listBuckets     func(ctx context.Context) ([]minio.BucketInfo, error)
+	objects         map[string]map[string][]byte
+}
+
+func (m *mockMinIOClient) PresignedGetObject(ctx context.Context, bucketName, objectName string, expires time.Duration, reqParams url.Values) (*url.URL, error) {
+	return url.Parse("http://mock-minio/download")
+}
+
+func (m *mockMinIOClient) PresignedPutObject(ctx context.Context, bucketName, objectName string, expires time.Duration) (*url.URL, error) {
+	return url.Parse("http://mock-minio/upload")
 }
 
 func newMockMinIOClient() *mockMinIOClient {
@@ -40,8 +50,8 @@ func newMockMinIOClient() *mockMinIOClient {
 }
 
 func (m *mockMinIOClient) ListBuckets(ctx context.Context) ([]minio.BucketInfo, error) {
-	if m.listBucketsFunc != nil {
-		return m.listBucketsFunc(ctx)
+	if m.listBuckets != nil {
+		return m.listBuckets(ctx)
 	}
 	var res []minio.BucketInfo
 	for k := range m.objects {
@@ -176,7 +186,7 @@ type dummyMetadataService struct {
 	objects map[string]bool
 }
 
-func (d *dummyMetadataService) CreateObjectMetadata(ctx context.Context, bucketID uuid.UUID, objectKey, providerObjectKey string, size int64, mimeType, etag, providerID string, ownerID *uuid.UUID, tags map[string]string, meta map[string]string) (*model.Object, error) {
+func (d *dummyMetadataService) CreateObjectMetadata(ctx context.Context, workspaceID string, bucketID uuid.UUID, objectKey, providerObjectKey string, size int64, mimeType, etag, providerID string, ownerID *uuid.UUID, tags map[string]string, meta map[string]string) (*model.Object, error) {
 	if d.objects == nil {
 		d.objects = make(map[string]bool)
 	}
@@ -203,23 +213,29 @@ func (d *dummyMetadataService) SearchObjects(ctx context.Context, query dto.Sear
 }
 func (d *dummyMetadataService) TagObject(ctx context.Context, id string, tags map[string]string) error { return nil }
 func (d *dummyMetadataService) UntagObject(ctx context.Context, id string, keys []string) error { return nil }
-func (d *dummyMetadataService) SoftDeleteObject(ctx context.Context, id string) error {
+func (d *dummyMetadataService) SoftDeleteObject(ctx context.Context, workspaceID, id string) error {
 	// For testing, just clear everything
 	d.objects = make(map[string]bool)
 	return nil
 }
 func (d *dummyMetadataService) RestoreObject(ctx context.Context, id string) error { return nil }
+func (d *dummyMetadataService) ListObjectVersions(ctx context.Context, id string) ([]dto.ObjectVersionDTO, error) {
+	return nil, nil
+}
+func (d *dummyMetadataService) FindObjectsForExpiration(ctx context.Context, bucketID string, prefix string, olderThan time.Time) ([]model.Object, error) {
+	return nil, nil
+}
 func (d *dummyMetadataService) CreateBucket(ctx context.Context, workspaceID uuid.UUID, providerID, name, region string) (*model.Bucket, error) { return nil, nil }
 func (d *dummyMetadataService) FindBucketByName(ctx context.Context, workspaceID, bucketName string) (*model.Bucket, error) { return &model.Bucket{ID: uuid.New(), Name: bucketName}, nil }
 func (d *dummyMetadataService) DeleteBucket(ctx context.Context, workspaceID, bucketName string) error { return nil }
 func (d *dummyMetadataService) ListBuckets(ctx context.Context, workspaceID string) ([]model.Bucket, error) { return nil, nil }
 
-type mockResolver struct {
+type mockPolicyEngine struct {
 	id string
 }
 
-func (m mockResolver) GetDefaultProviderID(ctx context.Context, workspaceID string) (string, error) {
-	return m.id, nil
+func (m mockPolicyEngine) Resolve(ctx context.Context, evalCtx *policyModel.EvaluationContext, op string) (string, *policyModel.RoutingDecision, error) {
+	return m.id, nil, nil
 }
 
 func TestMinIOProvider_EndToEndPipelineIntegration(t *testing.T) {
@@ -239,13 +255,13 @@ func TestMinIOProvider_EndToEndPipelineIntegration(t *testing.T) {
 	}
 
 	// 3. Configure Policy Evaluator to route to "minio"
-	evaluator := policy.NewDefaultEvaluator(mockResolver{id: "minio"})
+	evaluator := mockPolicyEngine{id: "minio"}
 
 	// 4. Instantiate central Storage Router
 	router := storage.NewRouter(registry, evaluator)
 
 	// 5. Instantiate high-level Storage Service
-	service := storage.NewService(router, &dummyMetadataService{})
+	service := storage.NewService(router, &dummyMetadataService{}, nil)
 
 	ctx := context.Background()
 

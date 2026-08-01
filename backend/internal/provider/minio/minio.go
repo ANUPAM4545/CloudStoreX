@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"net/url"
 	"strings"
 	"time"
 
@@ -23,6 +24,8 @@ type MinIOClient interface {
 	MakeBucket(ctx context.Context, bucketName string, opts minio.MakeBucketOptions) error
 	BucketExists(ctx context.Context, bucketName string) (bool, error)
 	ListBuckets(ctx context.Context) ([]minio.BucketInfo, error)
+	PresignedGetObject(ctx context.Context, bucketName, objectName string, expires time.Duration, reqParams url.Values) (*url.URL, error)
+	PresignedPutObject(ctx context.Context, bucketName, objectName string, expires time.Duration) (*url.URL, error)
 }
 
 // Config holds MinIO connection and default bucket settings.
@@ -327,9 +330,22 @@ func (p *Provider) ListBuckets(ctx context.Context) ([]*storage.Bucket, error) {
 }
 
 // All advanced operations deferred to later epics as per Scope Reduction
-func (p *Provider) GeneratePresignedURL(ctx context.Context, bucket, key string, expiration time.Duration) (string, error) {
-	return "", storage.ErrUnsupportedFeature
+func (p *Provider) GeneratePresignedDownloadURL(ctx context.Context, bucket, key string, expiration time.Duration) (string, error) {
+	url, err := p.client.PresignedGetObject(ctx, bucket, key, expiration, nil)
+	if err != nil {
+		return "", err
+	}
+	return url.String(), nil
 }
+
+func (p *Provider) GeneratePresignedUploadURL(ctx context.Context, bucket, key string, expiration time.Duration) (string, error) {
+	url, err := p.client.PresignedPutObject(ctx, bucket, key, expiration)
+	if err != nil {
+		return "", err
+	}
+	return url.String(), nil
+}
+
 func (p *Provider) CopyObject(ctx context.Context, srcBucket, srcKey, destBucket, destKey string) (*storage.StorageResponse, error) {
 	return nil, storage.ErrUnsupportedFeature
 }

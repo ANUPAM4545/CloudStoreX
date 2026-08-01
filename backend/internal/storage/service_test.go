@@ -15,7 +15,7 @@ type mockRouter struct {
 func TestService_UploadAndDownloadObject(t *testing.T) {
 	mockProv := &mockProvider{}
 	router := &mockRouter{StorageProvider: mockProv}
-	svc := NewService(router, &mockMetadataService{})
+	svc := NewService(router, &mockMetadataService{}, nil)
 
 	ctx := context.WithValue(context.Background(), CtxKeyRequestID, "req-12345")
 	ctx = context.WithValue(ctx, CtxKeyWorkspaceID, "ws-67890")
@@ -40,7 +40,7 @@ func TestService_UploadAndDownloadObject(t *testing.T) {
 func TestService_AllOperations(t *testing.T) {
 	mockProv := &mockProvider{}
 	router := &mockRouter{StorageProvider: mockProv}
-	svc := NewService(router, &mockMetadataService{})
+	svc := NewService(router, &mockMetadataService{}, nil)
 
 	ctx := context.Background()
 
@@ -56,8 +56,8 @@ func TestService_AllOperations(t *testing.T) {
 	if objs, err := svc.ListObjects(ctx, "new-bucket", ""); err != nil || len(objs) == 0 {
 		t.Errorf("unexpected error on ListObjects: %v", err)
 	}
-	if url, err := svc.GeneratePresignedURL(ctx, "new-bucket", "test-key", time.Hour); err != nil || url == "" {
-		t.Errorf("unexpected error on GeneratePresignedURL: %v", err)
+	if url, err := svc.GeneratePresignedDownloadURL(ctx, "new-bucket", "test-key", time.Hour); err != nil || url == "" {
+		t.Errorf("unexpected error on GeneratePresignedDownloadURL: %v", err)
 	}
 	if err := svc.DeleteObject(ctx, "new-bucket", "test-key"); err != nil {
 		t.Errorf("unexpected error on DeleteObject: %v", err)

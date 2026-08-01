@@ -9,6 +9,7 @@ import (
 
 	"github.com/cloudstorex/backend/internal/metadata/dto"
 	"github.com/cloudstorex/backend/internal/metadata/service"
+	"github.com/cloudstorex/backend/internal/quota"
 	"github.com/cloudstorex/backend/internal/shared/logger"
 	"github.com/google/uuid"
 )
@@ -23,11 +24,14 @@ type Service interface {
 	CreateBucket(ctx context.Context, bucket string) error
 	DeleteBucket(ctx context.Context, bucket string) error
 	ListBuckets(ctx context.Context) ([]*Bucket, error)
-	GeneratePresignedURL(ctx context.Context, bucket, key string, expiration time.Duration) (string, error)
+	GeneratePresignedUploadURL(ctx context.Context, bucket, key string, expiration time.Duration) (string, error)
+	GeneratePresignedDownloadURL(ctx context.Context, bucket, key string, expiration time.Duration) (string, error)
 
 	SearchObjects(ctx context.Context, query dto.SearchQuery) ([]dto.ObjectMetaDTO, int64, error)
 	GetObjectByID(ctx context.Context, id string) (*dto.ObjectMetaDTO, error)
 	GetObjectMetadata(ctx context.Context, id string) (map[string]string, error)
+	ListObjectVersions(ctx context.Context, id string) ([]dto.ObjectVersionDTO, error)
+	RestoreObject(ctx context.Context, id string) error
 	TagObject(ctx context.Context, id string, tags map[string]string) error
 	UntagObject(ctx context.Context, id string, keys []string) error
 }
@@ -35,11 +39,12 @@ type Service interface {
 type defaultService struct {
 	router   Router
 	metadata service.MetadataService
+	quota    quota.Service
 	log      *slog.Logger
 }
 
 // NewService creates a new high-level Storage Service.
-func NewService(router Router, metadata service.MetadataService) Service {
+func NewService(router Router, metadata service.MetadataService, quota quota.Service) Service {
 	l := logger.Log
 	if l == nil {
 		l = slog.Default()
@@ -47,6 +52,7 @@ func NewService(router Router, metadata service.MetadataService) Service {
 	return &defaultService{
 		router:   router,
 		metadata: metadata,
+		quota:    quota,
 		log:      l,
 	}
 }
@@ -85,6 +91,14 @@ func (s *defaultService) UploadObject(ctx context.Context, bucket, key string, r
 	start := time.Now()
 	
 	workspaceIDStr := GetContextValue(ctx, CtxKeyWorkspaceID)
+
+	// 1. Quota Check
+	if s.quota != nil {
+		if err := s.quota.CheckQuota(ctx, workspaceIDStr, size); err != nil {
+			s.logOperation(ctx, "UploadObject (Quota Check)", bucket, key, start, err)
+			return nil, err
+		}
+	}
 	
 	// Upload to Provider first
 	res, err := s.router.Upload(ctx, bucket, key, reader, size, meta)
@@ -127,7 +141,7 @@ func (s *defaultService) UploadObject(ctx context.Context, bucket, key string, r
 	}
 
 	// Create Metadata in Postgres
-	_, err = s.metadata.CreateObjectMetadata(ctx, bucketMeta.ID, key, key, size, mimeType, etag, bucketMeta.ProviderID, ownerID, tags, custom)
+	_, err = s.metadata.CreateObjectMetadata(ctx, workspaceIDStr, bucketMeta.ID, key, key, size, mimeType, etag, bucketMeta.ProviderID, ownerID, tags, custom)
 	if err != nil {
 		// Rollback physical upload since metadata persistence failed
 		_ = s.router.Delete(context.Background(), bucket, key)
@@ -175,6 +189,17 @@ func (s *defaultService) DeleteObject(ctx context.Context, bucket, key string) e
 		return err
 	}
 
+	// Compliance Checks
+	if objMeta.LegalHold {
+		s.logOperation(ctx, "DeleteObject (Blocked by Legal Hold)", bucket, key, start, fmt.Errorf("object is under legal hold"))
+		return fmt.Errorf("cannot delete object under legal hold")
+	}
+
+	if objMeta.RetainUntil != nil && objMeta.RetainUntil.After(time.Now()) {
+		s.logOperation(ctx, "DeleteObject (Blocked by Retention)", bucket, key, start, fmt.Errorf("object is retained until %v", objMeta.RetainUntil))
+		return fmt.Errorf("cannot delete object, retained until %v", objMeta.RetainUntil)
+	}
+
 	// Delete from Provider
 	err = s.router.Delete(ctx, bucket, key)
 	if err != nil {
@@ -183,7 +208,7 @@ func (s *defaultService) DeleteObject(ctx context.Context, bucket, key string) e
 	}
 	
 	// Soft Delete Metadata
-	err = s.metadata.SoftDeleteObject(ctx, objMeta.ID.String())
+	err = s.metadata.SoftDeleteObject(ctx, workspaceIDStr, objMeta.ID.String())
 	s.logOperation(ctx, "DeleteObject", bucket, key, start, err)
 	return err
 }
@@ -272,10 +297,17 @@ func (s *defaultService) ListBuckets(ctx context.Context) ([]*Bucket, error) {
 	return buckets, err
 }
 
-func (s *defaultService) GeneratePresignedURL(ctx context.Context, bucket, key string, expiration time.Duration) (string, error) {
+func (s *defaultService) GeneratePresignedUploadURL(ctx context.Context, bucket, key string, expiration time.Duration) (string, error) {
 	start := time.Now()
-	url, err := s.router.GeneratePresignedURL(ctx, bucket, key, expiration)
-	s.logOperation(ctx, "GeneratePresignedURL", bucket, key, start, err)
+	url, err := s.router.GeneratePresignedUploadURL(ctx, bucket, key, expiration)
+	s.logOperation(ctx, "GeneratePresignedUploadURL", bucket, key, start, err)
+	return url, err
+}
+
+func (s *defaultService) GeneratePresignedDownloadURL(ctx context.Context, bucket, key string, expiration time.Duration) (string, error) {
+	start := time.Now()
+	url, err := s.router.GeneratePresignedDownloadURL(ctx, bucket, key, expiration)
+	s.logOperation(ctx, "GeneratePresignedDownloadURL", bucket, key, start, err)
 	return url, err
 }
 
@@ -329,6 +361,20 @@ func (s *defaultService) GetObjectMetadata(ctx context.Context, id string) (map[
 	res, err := s.metadata.GetObjectMetadata(ctx, id)
 	s.logOperation(ctx, "GetObjectMetadata", "", id, start, err)
 	return res, err
+}
+
+func (s *defaultService) ListObjectVersions(ctx context.Context, id string) ([]dto.ObjectVersionDTO, error) {
+	start := time.Now()
+	res, err := s.metadata.ListObjectVersions(ctx, id)
+	s.logOperation(ctx, "ListObjectVersions", "", id, start, err)
+	return res, err
+}
+
+func (s *defaultService) RestoreObject(ctx context.Context, id string) error {
+	start := time.Now()
+	err := s.metadata.RestoreObject(ctx, id)
+	s.logOperation(ctx, "RestoreObject", "", id, start, err)
+	return err
 }
 
 func (s *defaultService) TagObject(ctx context.Context, id string, tags map[string]string) error {

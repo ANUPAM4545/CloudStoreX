@@ -157,14 +157,26 @@ func (r *defaultRouter) ListBuckets(ctx context.Context) ([]*Bucket, error) {
 	return buckets, nil
 }
 
-func (r *defaultRouter) GeneratePresignedURL(ctx context.Context, bucket, key string, expiration time.Duration) (string, error) {
-	prov, providerID, err := r.resolveProvider(ctx, bucket, key, 0, "GeneratePresignedURL")
+func (r *defaultRouter) GeneratePresignedUploadURL(ctx context.Context, bucket, key string, expiration time.Duration) (string, error) {
+	prov, providerID, err := r.resolveProvider(ctx, bucket, key, 0, "GeneratePresignedUploadURL")
 	if err != nil {
 		return "", err
 	}
-	url, err := prov.GeneratePresignedURL(ctx, bucket, key, expiration)
+	url, err := prov.GeneratePresignedUploadURL(ctx, bucket, key, expiration)
 	if err != nil {
-		return "", NewDomainError("presigned_url", providerID, bucket, key, err)
+		return "", NewDomainError("presigned_upload_url", providerID, bucket, key, err)
+	}
+	return url, nil
+}
+
+func (r *defaultRouter) GeneratePresignedDownloadURL(ctx context.Context, bucket, key string, expiration time.Duration) (string, error) {
+	prov, providerID, err := r.resolveProvider(ctx, bucket, key, 0, "GeneratePresignedDownloadURL")
+	if err != nil {
+		return "", err
+	}
+	url, err := prov.GeneratePresignedDownloadURL(ctx, bucket, key, expiration)
+	if err != nil {
+		return "", NewDomainError("presigned_download_url", providerID, bucket, key, err)
 	}
 	return url, nil
 }

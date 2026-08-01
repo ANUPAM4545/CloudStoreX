@@ -185,7 +185,11 @@ func (p *Provider) ListObjects(ctx context.Context, bucket, prefix string) ([]*s
 	return objects, nil
 }
 
-func (p *Provider) GeneratePresignedURL(ctx context.Context, bucket, key string, expiration time.Duration) (string, error) {
+func (p *Provider) GeneratePresignedDownloadURL(ctx context.Context, bucket, key string, expiration time.Duration) (string, error) {
+	return "", errors.New("not implemented")
+}
+
+func (p *Provider) GeneratePresignedUploadURL(ctx context.Context, bucket, key string, expiration time.Duration) (string, error) {
 	return "", errors.New("not implemented")
 }
 

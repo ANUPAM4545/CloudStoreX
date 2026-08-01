@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"time"
 
 	"github.com/cloudstorex/backend/internal/metadata/dto"
 	"github.com/cloudstorex/backend/internal/metadata/model"
@@ -11,11 +12,14 @@ import (
 // MetadataRepository handles interactions with the Postgres metadata catalog.
 type MetadataRepository interface {
 	CreateObject(ctx context.Context, obj *model.Object) error
+	CreateObjectVersion(ctx context.Context, version *model.ObjectVersion) error
 	UpdateObject(ctx context.Context, obj *model.Object) error
 	DeleteObject(ctx context.Context, id string) error // Soft delete
 	FindObjectByKey(ctx context.Context, bucketID, objectKey string) (*model.Object, error)
 	FindObjectByID(ctx context.Context, id string) (*model.Object, error)
+	ListObjectVersions(ctx context.Context, id string) ([]model.ObjectVersion, error)
 	SearchObjects(ctx context.Context, query dto.SearchQuery) ([]model.Object, int64, error)
+	FindObjectsForExpiration(ctx context.Context, bucketID string, prefix string, olderThan time.Time) ([]model.Object, error)
 	
 	CreateBucket(ctx context.Context, bucket *model.Bucket) error
 	FindBucketByName(ctx context.Context, workspaceID, bucketName string) (*model.Bucket, error)
@@ -46,12 +50,27 @@ func (r *postgresMetadataRepository) CreateObject(ctx context.Context, obj *mode
 	return r.db.WithContext(ctx).Create(obj).Error
 }
 
+func (r *postgresMetadataRepository) CreateObjectVersion(ctx context.Context, version *model.ObjectVersion) error {
+	// First mark all other versions for this object as not current
+	if version.IsCurrent {
+		r.db.WithContext(ctx).Model(&model.ObjectVersion{}).
+			Where("object_id = ?", version.ObjectID).
+			Update("is_current", false)
+	}
+	return r.db.WithContext(ctx).Create(version).Error
+}
+
 func (r *postgresMetadataRepository) UpdateObject(ctx context.Context, obj *model.Object) error {
 	return r.db.WithContext(ctx).Save(obj).Error
 }
 
 func (r *postgresMetadataRepository) DeleteObject(ctx context.Context, id string) error {
-	return r.db.WithContext(ctx).Model(&model.Object{}).Where("id = ?", id).Update("is_deleted", true).Delete(&model.Object{}, "id = ?", id).Error
+	now := time.Now()
+	return r.db.WithContext(ctx).Model(&model.Object{}).Where("id = ?", id).Updates(map[string]interface{}{
+		"is_deleted":      true,
+		"trash_timestamp": &now,
+		"deleted_at":      &now,
+	}).Error
 }
 
 func (r *postgresMetadataRepository) FindObjectByKey(ctx context.Context, bucketID, objectKey string) (*model.Object, error) {
@@ -78,6 +97,33 @@ func (r *postgresMetadataRepository) FindObjectByID(ctx context.Context, id stri
 		return nil, err
 	}
 	return &obj, nil
+}
+
+func (r *postgresMetadataRepository) ListObjectVersions(ctx context.Context, id string) ([]model.ObjectVersion, error) {
+	var versions []model.ObjectVersion
+	err := r.db.WithContext(ctx).
+		Where("object_id = ?", id).
+		Order("version_number DESC").
+		Find(&versions).Error
+	if err != nil {
+		return nil, err
+	}
+	return versions, nil
+}
+
+func (r *postgresMetadataRepository) FindObjectsForExpiration(ctx context.Context, bucketID string, prefix string, olderThan time.Time) ([]model.Object, error) {
+	var objects []model.Object
+	query := r.db.WithContext(ctx).
+		Where("bucket_id = ?", bucketID).
+		Where("is_deleted = false").
+		Where("created_at < ?", olderThan)
+		
+	if prefix != "" {
+		query = query.Where("object_key LIKE ?", prefix+"%")
+	}
+	
+	err := query.Find(&objects).Error
+	return objects, err
 }
 
 func (r *postgresMetadataRepository) SearchObjects(ctx context.Context, query dto.SearchQuery) ([]model.Object, int64, error) {

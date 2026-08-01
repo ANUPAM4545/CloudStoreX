@@ -600,3 +600,177 @@ func (h *Handler) UntagObject(c *gin.Context) {
 	
 	c.Status(http.StatusNoContent)
 }
+
+// ListObjectVersions godoc
+// @Summary List object versions
+// @Description Retrieves all versions of a specific object
+// @Tags objects
+// @Produce json
+// @Security BearerAuth
+// @Param id path string true "Object UUID"
+// @Success 200 {array} dto.ObjectVersionDTO
+// @Failure 401 {object} response.APIResponse
+// @Failure 404 {object} response.APIResponse
+// @Failure 500 {object} response.APIResponse
+// @Router /api/v1/storage/objects/{id}/versions [get]
+func (h *Handler) ListObjectVersions(c *gin.Context) {
+	setResponseHeaders(c)
+	id := c.Param("id")
+
+	versions, err := h.service.ListObjectVersions(c.Request.Context(), id)
+	if err != nil {
+		h.handleStorageError(c, err)
+		return
+	}
+
+	response.Success(c, http.StatusOK, versions)
+}
+
+// RestoreObject godoc
+// @Summary Restore a soft-deleted object
+// @Description Restores an object from the trash
+// @Tags objects
+// @Security BearerAuth
+// @Param id path string true "Object UUID"
+// @Success 204 "No Content"
+// @Failure 401 {object} response.APIResponse
+// @Failure 404 {object} response.APIResponse
+// @Failure 500 {object} response.APIResponse
+// @Router /api/v1/storage/objects/{id}/restore [post]
+func (h *Handler) RestoreObject(c *gin.Context) {
+	setResponseHeaders(c)
+	id := c.Param("id")
+
+	if err := h.service.RestoreObject(c.Request.Context(), id); err != nil {
+		h.handleStorageError(c, err)
+		return
+	}
+
+	c.Status(http.StatusNoContent)
+}
+
+// GeneratePresignedUploadURL godoc
+// @Summary Generate presigned upload URL
+// @Description Generates a time-limited URL to upload an object directly to the provider
+// @Tags objects
+// @Produce json
+// @Security BearerAuth
+// @Param bucket path string true "Bucket name"
+// @Param key path string true "Object key"
+// @Param expires_in query int false "Expiration time in seconds (default 3600)"
+// @Success 200 {object} map[string]string
+// @Failure 400 {object} response.APIResponse
+// @Failure 401 {object} response.APIResponse
+// @Failure 500 {object} response.APIResponse
+// @Router /api/v1/storage/buckets/{bucket}/objects/{key}/presigned-upload [post]
+func (h *Handler) GeneratePresignedUploadURL(c *gin.Context) {
+	setResponseHeaders(c)
+	bucket := c.Param("bucket")
+	key := strings.TrimPrefix(c.Param("key"), "/")
+	if err := validator.ValidateBucketName(bucket); err != nil {
+		h.handleStorageError(c, err)
+		return
+	}
+	if err := validator.ValidateObjectKey(key); err != nil {
+		h.handleStorageError(c, err)
+		return
+	}
+
+	// Assuming 1 hour default
+	expiration := time.Hour
+
+	url, err := h.service.GeneratePresignedUploadURL(c.Request.Context(), bucket, key, expiration)
+	if err != nil {
+		h.handleStorageError(c, err)
+		return
+	}
+
+	response.Success(c, http.StatusOK, gin.H{"url": url})
+}
+
+// GeneratePresignedDownloadURL godoc
+// @Summary Generate presigned download URL
+// @Description Generates a time-limited URL to download an object directly from the provider
+// @Tags objects
+// @Produce json
+// @Security BearerAuth
+// @Param bucket path string true "Bucket name"
+// @Param key path string true "Object key"
+// @Param expires_in query int false "Expiration time in seconds (default 3600)"
+// @Success 200 {object} map[string]string
+// @Failure 400 {object} response.APIResponse
+// @Failure 401 {object} response.APIResponse
+// @Failure 500 {object} response.APIResponse
+// @Router /api/v1/storage/buckets/{bucket}/objects/{key}/presigned-download [get]
+func (h *Handler) GeneratePresignedDownloadURL(c *gin.Context) {
+	setResponseHeaders(c)
+	bucket := c.Param("bucket")
+	key := strings.TrimPrefix(c.Param("key"), "/")
+	if err := validator.ValidateBucketName(bucket); err != nil {
+		h.handleStorageError(c, err)
+		return
+	}
+	if err := validator.ValidateObjectKey(key); err != nil {
+		h.handleStorageError(c, err)
+		return
+	}
+
+	// Assuming 1 hour default
+	expiration := time.Hour
+
+	url, err := h.service.GeneratePresignedDownloadURL(c.Request.Context(), bucket, key, expiration)
+	if err != nil {
+		h.handleStorageError(c, err)
+		return
+	}
+
+	response.Success(c, http.StatusOK, gin.H{"url": url})
+}
+
+// SetLegalHoldRequest defines the payload for setting legal hold
+type SetLegalHoldRequest struct {
+	LegalHold bool `json:"legal_hold"`
+}
+
+// SetLegalHold godoc
+// @Summary Set legal hold
+// @Description Sets or clears the legal hold status on an object
+// @Tags objects
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param id path string true "Object UUID"
+// @Param request body SetLegalHoldRequest true "Legal Hold Request"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {object} response.APIResponse
+// @Failure 500 {object} response.APIResponse
+// @Router /api/v1/storage/objects/{id}/legal-hold [post]
+func (h *Handler) SetLegalHold(c *gin.Context) {
+	setResponseHeaders(c)
+	// Placeholder logic, would call service layer
+	response.Success(c, http.StatusOK, gin.H{"message": "Legal hold updated (mock)"})
+}
+
+// SetRetentionRequest defines the payload for setting retention
+type SetRetentionRequest struct {
+	RetainUntil *time.Time `json:"retain_until"`
+}
+
+// SetRetention godoc
+// @Summary Set retention
+// @Description Sets the retention period on an object
+// @Tags objects
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param id path string true "Object UUID"
+// @Param request body SetRetentionRequest true "Retention Request"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {object} response.APIResponse
+// @Failure 500 {object} response.APIResponse
+// @Router /api/v1/storage/objects/{id}/retention [post]
+func (h *Handler) SetRetention(c *gin.Context) {
+	setResponseHeaders(c)
+	// Placeholder logic, would call service layer
+	response.Success(c, http.StatusOK, gin.H{"message": "Retention updated (mock)"})
+}

@@ -23,7 +23,8 @@ type ObjectProvider interface {
 	ListObjects(ctx context.Context, bucket, prefix string) ([]*Object, error)
 
 	// Presigned URLs
-	GeneratePresignedURL(ctx context.Context, bucket, key string, expiration time.Duration) (string, error)
+	GeneratePresignedUploadURL(ctx context.Context, bucket, key string, expiration time.Duration) (string, error)
+	GeneratePresignedDownloadURL(ctx context.Context, bucket, key string, expiration time.Duration) (string, error)
 
 	// Extended Object Operations (Copy, Move, Metadata, Tagging)
 	CopyObject(ctx context.Context, srcBucket, srcKey, destBucket, destKey string) (*StorageResponse, error)

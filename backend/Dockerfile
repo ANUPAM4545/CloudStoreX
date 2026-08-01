@@ -1,5 +1,5 @@
 # Stage 1: Build the Go application
-FROM golang:1.23-alpine AS builder
+FROM golang:1.26-alpine AS builder
 
 # Install SSL ca certificates and tzdata
 RUN apk --no-cache add ca-certificates tzdata

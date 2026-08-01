@@ -1,0 +1,12 @@
+# S3 Backend Configuration Example with DynamoDB State Locking (Refinement 3)
+# To enable remote state storage, copy this file to backend.tf and customize parameters.
+
+terraform {
+  backend "s3" {
+    bucket         = "cloudstorex-terraform-state-prod"
+    key            = "cloudstorex/production/terraform.tfstate"
+    region         = "us-east-1"
+    encrypt        = true
+    dynamodb_table = "cloudstorex-terraform-locks"
+  }
+}

@@ -19,16 +19,14 @@ import (
 	"github.com/cloudstorex/backend/internal/provider"
 	"github.com/cloudstorex/backend/internal/storage"
 	minio "github.com/minio/minio-go/v7"
-
+	"github.com/minio/minio-go/v7/pkg/tags"
 )
 
 // mockMinIOClient implements MinIOClient for unit testing.
 type mockMinIOClient struct {
 	putFunc       func(ctx context.Context, bucket, key string, r io.Reader, size int64, opts minio.PutObjectOptions) (minio.UploadInfo, error)
-	getFunc       func(ctx context.Context, bucket, key string, opts minio.GetObjectOptions) (*minio.Object, error)
 	removeFunc    func(ctx context.Context, bucket, key string, opts minio.RemoveObjectOptions) error
 	statFunc      func(ctx context.Context, bucket, key string, opts minio.StatObjectOptions) (minio.ObjectInfo, error)
-	listFunc      func(ctx context.Context, bucket string, opts minio.ListObjectsOptions) <-chan minio.ObjectInfo
 	makeBucket      func(ctx context.Context, bucket string, opts minio.MakeBucketOptions) error
 	bucketExists    func(ctx context.Context, bucket string) (bool, error)
 	listBuckets     func(ctx context.Context) ([]minio.BucketInfo, error)
@@ -41,6 +39,35 @@ func (m *mockMinIOClient) PresignedGetObject(ctx context.Context, bucketName, ob
 
 func (m *mockMinIOClient) PresignedPutObject(ctx context.Context, bucketName, objectName string, expires time.Duration) (*url.URL, error) {
 	return url.Parse("http://mock-minio/upload")
+}
+
+func (m *mockMinIOClient) CopyObject(ctx context.Context, dst minio.CopyDestOptions, src minio.CopySrcOptions) (minio.UploadInfo, error) {
+	return minio.UploadInfo{Bucket: dst.Bucket, Key: dst.Object, Size: 100}, nil
+}
+
+func (m *mockMinIOClient) GetObjectTagging(ctx context.Context, bucketName, objectName string, opts minio.GetObjectTaggingOptions) (*tags.Tags, error) {
+	t, _ := tags.NewTags(map[string]string{"mock": "tag"}, true)
+	return t, nil
+}
+
+func (m *mockMinIOClient) PutObjectTagging(ctx context.Context, bucketName, objectName string, otags *tags.Tags, opts minio.PutObjectTaggingOptions) error {
+	return nil
+}
+
+func (m *mockMinIOClient) NewMultipartUpload(ctx context.Context, bucket, object string, opts minio.PutObjectOptions) (uploadID string, err error) {
+	return "mock-upload-id", nil
+}
+
+func (m *mockMinIOClient) PutObjectPart(ctx context.Context, bucket, object, uploadID string, partID int, data io.Reader, size int64, opts minio.PutObjectPartOptions) (minio.ObjectPart, error) {
+	return minio.ObjectPart{PartNumber: partID, Size: size, ETag: "mock-etag"}, nil
+}
+
+func (m *mockMinIOClient) CompleteMultipartUpload(ctx context.Context, bucket, object, uploadID string, parts []minio.CompletePart, opts minio.PutObjectOptions) (minio.UploadInfo, error) {
+	return minio.UploadInfo{Bucket: bucket, Key: object, Size: 100, ETag: "mock-etag"}, nil
+}
+
+func (m *mockMinIOClient) AbortMultipartUpload(ctx context.Context, bucket, object, uploadID string) error {
+	return nil
 }
 
 func newMockMinIOClient() *mockMinIOClient {

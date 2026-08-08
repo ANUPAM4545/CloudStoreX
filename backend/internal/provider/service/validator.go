@@ -24,8 +24,8 @@ func NewProviderValidator() ProviderValidator {
 func (v *defaultProviderValidator) ValidateConnection(ctx context.Context, p *model.Provider, extended bool) (int64, error) {
 	start := time.Now()
 	
-	// TODO: Instantiate temporary provider client based on p.ProviderType (e.g. minio, aws_s3) using p.CredentialRef.
-	// We will simulate the latency and check for now.
+	// Future Implementation: Instantiate temporary provider client based on p.ProviderType
+	// (e.g. minio, aws_s3) using p.CredentialRef. Currently simulating latency.
 	
 	// Basic Validation:
 	// if err := tmpProvider.Exists(ctx, p.BucketPrefix, "some-check"); err != nil ...

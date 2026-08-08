@@ -13,8 +13,13 @@ type ContextKey string
 
 const (
 	CtxKeyRequestID     ContextKey = "request_id"
-	CtxKeyUserID        ContextKey = "user_id"
 	CtxKeyWorkspaceID   ContextKey = "workspace_id"
+	CtxKeyOrganizationID ContextKey = "organization_id"
+	CtxKeyUserID        ContextKey = "user_id"
+	
+	CtxKeyEvaluationTags        ContextKey = "eval_tags"
+	CtxKeyEvaluationMimeType    ContextKey = "eval_mime_type"
+	CtxKeyEvaluationStorageClass ContextKey = "eval_storage_class"
 	CtxKeyCorrelationID ContextKey = "correlation_id"
 )
 
@@ -67,6 +72,8 @@ type Object struct {
 	Size         int64           `json:"size"`
 	ETag         string          `json:"etag,omitempty"`
 	LastModified time.Time       `json:"last_modified"`
+	VersionID    string          `json:"version_id,omitempty"`
+	IsLatest     bool            `json:"is_latest"`
 	Metadata     *ObjectMetadata `json:"metadata,omitempty"`
 }
 

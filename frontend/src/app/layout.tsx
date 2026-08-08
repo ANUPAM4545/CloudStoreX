@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
 import { Providers } from "@/components/providers";
+import { SmoothScroll } from "@/components/smooth-scroll";
+import { TooltipProvider } from "@/components/ui/tooltip";
 
 import { Toaster } from "sonner";
 
@@ -22,12 +24,16 @@ export default function RootLayout({
       <body className={`${inter.className} antialiased`}>
         <Providers
           attribute="class"
-          defaultTheme="system"
-          enableSystem
+          defaultTheme="dark"
+          forcedTheme="dark"
           disableTransitionOnChange
         >
-          {children}
-          <Toaster position="bottom-right" richColors />
+          <TooltipProvider>
+            <SmoothScroll>
+              {children}
+              <Toaster position="bottom-right" richColors />
+            </SmoothScroll>
+          </TooltipProvider>
         </Providers>
       </body>
     </html>

@@ -26,9 +26,8 @@ type ObjectProvider interface {
 	GeneratePresignedUploadURL(ctx context.Context, bucket, key string, expiration time.Duration) (string, error)
 	GeneratePresignedDownloadURL(ctx context.Context, bucket, key string, expiration time.Duration) (string, error)
 
-	// Extended Object Operations (Copy, Move, Metadata, Tagging)
+	// Extended Object Operations (Copy, Metadata, Tagging)
 	CopyObject(ctx context.Context, srcBucket, srcKey, destBucket, destKey string) (*StorageResponse, error)
-	MoveObject(ctx context.Context, srcBucket, srcKey, destBucket, destKey string) (*StorageResponse, error)
 	GetObjectMetadata(ctx context.Context, bucket, key string) (*ObjectMetadata, error)
 	SetObjectMetadata(ctx context.Context, bucket, key string, meta *ObjectMetadata) error
 	GetObjectTags(ctx context.Context, bucket, key string) (map[string]string, error)
@@ -44,8 +43,22 @@ type ObjectProvider interface {
 	ListObjectVersions(ctx context.Context, bucket, key string) ([]*Object, error)
 }
 
+// ProviderCapabilities describes the advanced features a specific provider supports.
+type ProviderCapabilities struct {
+	MultipartUpload          bool
+	ObjectCopy               bool
+	ObjectVersioning         bool
+	ObjectTags               bool
+	ObjectMetadata           bool
+	PresignedUploadURLs      bool
+	PresignedDownloadURLs    bool
+}
+
 // StorageProvider combines BucketProvider and ObjectProvider into a unified extensible contract.
 type StorageProvider interface {
 	BucketProvider
 	ObjectProvider
+
+	// Capabilities returns the feature capabilities of this provider.
+	Capabilities() ProviderCapabilities
 }

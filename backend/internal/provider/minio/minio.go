@@ -9,9 +9,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cloudstorex/backend/internal/observability/tracing"
+	"github.com/cloudstorex/backend/internal/provider"
 	"github.com/cloudstorex/backend/internal/storage"
 	minio "github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
+	"github.com/minio/minio-go/v7/pkg/tags"
 )
 
 // MinIOClient defines the subset of MinIO SDK operations used by the provider, enabling easy mocking.
@@ -26,6 +29,37 @@ type MinIOClient interface {
 	ListBuckets(ctx context.Context) ([]minio.BucketInfo, error)
 	PresignedGetObject(ctx context.Context, bucketName, objectName string, expires time.Duration, reqParams url.Values) (*url.URL, error)
 	PresignedPutObject(ctx context.Context, bucketName, objectName string, expires time.Duration) (*url.URL, error)
+	CopyObject(ctx context.Context, dst minio.CopyDestOptions, src minio.CopySrcOptions) (minio.UploadInfo, error)
+	GetObjectTagging(ctx context.Context, bucketName, objectName string, opts minio.GetObjectTaggingOptions) (*tags.Tags, error)
+	PutObjectTagging(ctx context.Context, bucketName, objectName string, otags *tags.Tags, opts minio.PutObjectTaggingOptions) error
+	
+	// Core methods for Multipart
+	NewMultipartUpload(ctx context.Context, bucket, object string, opts minio.PutObjectOptions) (uploadID string, err error)
+	PutObjectPart(ctx context.Context, bucket, object, uploadID string, partID int, data io.Reader, size int64, opts minio.PutObjectPartOptions) (minio.ObjectPart, error)
+	CompleteMultipartUpload(ctx context.Context, bucket, object, uploadID string, parts []minio.CompletePart, opts minio.PutObjectOptions) (minio.UploadInfo, error)
+	AbortMultipartUpload(ctx context.Context, bucket, object, uploadID string) error
+}
+
+// coreWrapper wraps minio.Client to provide MinIOClient including Core methods.
+type coreWrapper struct {
+	*minio.Client
+	core *minio.Core
+}
+
+func (w *coreWrapper) NewMultipartUpload(ctx context.Context, bucket, object string, opts minio.PutObjectOptions) (uploadID string, err error) {
+	return w.core.NewMultipartUpload(ctx, bucket, object, opts)
+}
+
+func (w *coreWrapper) PutObjectPart(ctx context.Context, bucket, object, uploadID string, partID int, data io.Reader, size int64, opts minio.PutObjectPartOptions) (minio.ObjectPart, error) {
+	return w.core.PutObjectPart(ctx, bucket, object, uploadID, partID, data, size, opts)
+}
+
+func (w *coreWrapper) CompleteMultipartUpload(ctx context.Context, bucket, object, uploadID string, parts []minio.CompletePart, opts minio.PutObjectOptions) (minio.UploadInfo, error) {
+	return w.core.CompleteMultipartUpload(ctx, bucket, object, uploadID, parts, opts)
+}
+
+func (w *coreWrapper) AbortMultipartUpload(ctx context.Context, bucket, object, uploadID string) error {
+	return w.core.AbortMultipartUpload(ctx, bucket, object, uploadID)
 }
 
 // Config holds MinIO connection and default bucket settings.
@@ -62,7 +96,10 @@ func NewProvider(ctx context.Context, cfg *Config, log *slog.Logger) (*Provider,
 	}
 
 	p := &Provider{
-		client: minioClient,
+		client: &coreWrapper{
+			Client: minioClient,
+			core:   &minio.Core{Client: minioClient},
+		},
 		config: cfg,
 		log:    log,
 	}
@@ -347,37 +384,316 @@ func (p *Provider) GeneratePresignedUploadURL(ctx context.Context, bucket, key s
 }
 
 func (p *Provider) CopyObject(ctx context.Context, srcBucket, srcKey, destBucket, destKey string) (*storage.StorageResponse, error) {
-	return nil, storage.ErrUnsupportedFeature
+	ctx, span := tracing.StartChildSpan(ctx, "MinIOProvider.CopyObject")
+	defer span.End()
+
+	start := time.Now()
+	
+	srcOpts := minio.CopySrcOptions{
+		Bucket: srcBucket,
+		Object: srcKey,
+	}
+	destOpts := minio.CopyDestOptions{
+		Bucket: destBucket,
+		Object: destKey,
+	}
+
+	var info minio.UploadInfo
+	err := provider.WithRetry(ctx, provider.DefaultRetryConfig(), func() error {
+		var innerErr error
+		info, innerErr = p.client.CopyObject(ctx, destOpts, srcOpts)
+		return p.translateError("CopyObject", destBucket, destKey, innerErr)
+	})
+
+	p.logOperation(ctx, "CopyObject", destBucket, destKey, start, err)
+	if err != nil {
+		return nil, err
+	}
+
+	return &storage.StorageResponse{
+		Bucket:       info.Bucket,
+		Key:          info.Key,
+		Size:         info.Size,
+		ETag:         info.ETag,
+		VersionID:    info.VersionID,
+		LastModified: info.LastModified,
+	}, nil
 }
-func (p *Provider) MoveObject(ctx context.Context, srcBucket, srcKey, destBucket, destKey string) (*storage.StorageResponse, error) {
-	return nil, storage.ErrUnsupportedFeature
-}
+
 func (p *Provider) GetObjectMetadata(ctx context.Context, bucket, key string) (*storage.ObjectMetadata, error) {
-	return nil, storage.ErrUnsupportedFeature
+	ctx, span := tracing.StartChildSpan(ctx, "MinIOProvider.GetObjectMetadata")
+	defer span.End()
+
+	start := time.Now()
+	var stat minio.ObjectInfo
+	
+	err := provider.WithRetry(ctx, provider.DefaultRetryConfig(), func() error {
+		var innerErr error
+		stat, innerErr = p.client.StatObject(ctx, bucket, key, minio.StatObjectOptions{})
+		return p.translateError("GetObjectMetadata", bucket, key, innerErr)
+	})
+
+	p.logOperation(ctx, "GetObjectMetadata", bucket, key, start, err)
+	if err != nil {
+		return nil, err
+	}
+	
+	meta := make(map[string]string)
+	for k, v := range stat.UserMetadata {
+		meta[k] = v
+	}
+
+	return &storage.ObjectMetadata{
+		ContentType: stat.ContentType,
+		Custom:      meta,
+		VersionID:   stat.VersionID,
+	}, nil
 }
+
 func (p *Provider) SetObjectMetadata(ctx context.Context, bucket, key string, meta *storage.ObjectMetadata) error {
-	return storage.ErrUnsupportedFeature
+	ctx, span := tracing.StartChildSpan(ctx, "MinIOProvider.SetObjectMetadata")
+	defer span.End()
+
+	start := time.Now()
+	
+	userMeta := make(map[string]string)
+	if meta != nil && meta.Custom != nil {
+		userMeta = meta.Custom
+	}
+	
+	srcOpts := minio.CopySrcOptions{
+		Bucket: bucket,
+		Object: key,
+	}
+	destOpts := minio.CopyDestOptions{
+		Bucket: bucket,
+		Object: key,
+		ReplaceMetadata: true,
+		UserMetadata: userMeta,
+	}
+	
+	err := provider.WithRetry(ctx, provider.DefaultRetryConfig(), func() error {
+		_, innerErr := p.client.CopyObject(ctx, destOpts, srcOpts)
+		return p.translateError("SetObjectMetadata", bucket, key, innerErr)
+	})
+
+	p.logOperation(ctx, "SetObjectMetadata", bucket, key, start, err)
+	return err
 }
+
 func (p *Provider) GetObjectTags(ctx context.Context, bucket, key string) (map[string]string, error) {
-	return nil, storage.ErrUnsupportedFeature
+	ctx, span := tracing.StartChildSpan(ctx, "MinIOProvider.GetObjectTags")
+	defer span.End()
+
+	start := time.Now()
+	
+	var tagSet *tags.Tags
+	err := provider.WithRetry(ctx, provider.DefaultRetryConfig(), func() error {
+		var innerErr error
+		tagSet, innerErr = p.client.GetObjectTagging(ctx, bucket, key, minio.GetObjectTaggingOptions{})
+		return p.translateError("GetObjectTags", bucket, key, innerErr)
+	})
+
+	p.logOperation(ctx, "GetObjectTags", bucket, key, start, err)
+	if err != nil {
+		return nil, err
+	}
+	
+	return tagSet.ToMap(), nil
 }
-func (p *Provider) SetObjectTags(ctx context.Context, bucket, key string, tags map[string]string) error {
-	return storage.ErrUnsupportedFeature
+
+func (p *Provider) SetObjectTags(ctx context.Context, bucket, key string, objectTags map[string]string) error {
+	ctx, span := tracing.StartChildSpan(ctx, "MinIOProvider.SetObjectTags")
+	defer span.End()
+
+	start := time.Now()
+	
+	tagSet, err := tags.NewTags(objectTags, true)
+	if err != nil {
+		return p.translateError("SetObjectTags", bucket, key, err)
+	}
+
+	err = provider.WithRetry(ctx, provider.DefaultRetryConfig(), func() error {
+		innerErr := p.client.PutObjectTagging(ctx, bucket, key, tagSet, minio.PutObjectTaggingOptions{})
+		return p.translateError("SetObjectTags", bucket, key, innerErr)
+	})
+
+	p.logOperation(ctx, "SetObjectTags", bucket, key, start, err)
+	return err
 }
+
+// Multiparts are typically handled via high-level PutObject in MinIO. 
+// CloudStoreX orchestration is requesting explicit multipart. MinIO go client Core API provides this, 
+// but using the generic minio.Client gives us minio.Core natively if we cast or use Core.
+// However, the cleanest approach is to return unsupported for manual multiparts if using standard client, 
+// or implement it using minio.Core.
+// We will return standard storage errors instead of generic unsupported for now, or implement it using Core.
+// Since MinIO SDK v7 doesn't expose NewMultipartUpload easily in the high-level client without using Core,
+// we will defer its implementation or map it to ErrUnsupportedFeature if not strictly needed in MinIO for this milestone.
+// But the user asked to eliminate all unsupported features. I will use the minio.Core client.
+
 func (p *Provider) CreateMultipartUpload(ctx context.Context, bucket, key string, meta *storage.ObjectMetadata) (*storage.MultipartUpload, error) {
-	return nil, storage.ErrUnsupportedFeature
+	ctx, span := tracing.StartChildSpan(ctx, "MinIOProvider.CreateMultipartUpload")
+	defer span.End()
+	
+	start := time.Now()
+	
+	contentType := "application/octet-stream"
+	var userMeta map[string]string
+	if meta != nil {
+		if meta.ContentType != "" {
+			contentType = meta.ContentType
+		}
+		if meta.Custom != nil {
+			userMeta = meta.Custom
+		}
+	}
+	
+	opts := minio.PutObjectOptions{
+		ContentType:  contentType,
+		UserMetadata: userMeta,
+	}
+	
+	var uploadID string
+	err := provider.WithRetry(ctx, provider.DefaultRetryConfig(), func() error {
+		var innerErr error
+		uploadID, innerErr = p.client.NewMultipartUpload(ctx, bucket, key, opts)
+		return p.translateError("CreateMultipartUpload", bucket, key, innerErr)
+	})
+	
+	p.logOperation(ctx, "CreateMultipartUpload", bucket, key, start, err)
+	if err != nil {
+		return nil, err
+	}
+	
+	return &storage.MultipartUpload{
+		UploadID: uploadID,
+		Bucket:   bucket,
+		Key:      key,
+	}, nil
 }
+
 func (p *Provider) UploadPart(ctx context.Context, uploadID, bucket, key string, partNumber int, reader io.Reader, size int64) (*storage.UploadPart, error) {
-	return nil, storage.ErrUnsupportedFeature
+	ctx, span := tracing.StartChildSpan(ctx, "MinIOProvider.UploadPart")
+	defer span.End()
+	
+	start := time.Now()
+	
+	var objPart minio.ObjectPart
+	err := provider.WithRetry(ctx, provider.DefaultRetryConfig(), func() error {
+		var innerErr error
+		objPart, innerErr = p.client.PutObjectPart(ctx, bucket, key, uploadID, partNumber, reader, size, minio.PutObjectPartOptions{})
+		return p.translateError("UploadPart", bucket, key, innerErr)
+	})
+	
+	p.logOperation(ctx, "UploadPart", bucket, key, start, err)
+	if err != nil {
+		return nil, err
+	}
+	
+	return &storage.UploadPart{
+		PartNumber: partNumber,
+		ETag:       objPart.ETag,
+		Size:       size,
+	}, nil
 }
+
 func (p *Provider) CompleteMultipartUpload(ctx context.Context, uploadID, bucket, key string, parts []*storage.UploadPart) (*storage.StorageResponse, error) {
-	return nil, storage.ErrUnsupportedFeature
+	ctx, span := tracing.StartChildSpan(ctx, "MinIOProvider.CompleteMultipartUpload")
+	defer span.End()
+	
+	start := time.Now()
+	
+	var completeParts []minio.CompletePart
+	for _, p := range parts {
+		completeParts = append(completeParts, minio.CompletePart{
+			PartNumber: p.PartNumber,
+			ETag:       p.ETag,
+		})
+	}
+	
+	var info minio.UploadInfo
+	err := provider.WithRetry(ctx, provider.DefaultRetryConfig(), func() error {
+		var innerErr error
+		info, innerErr = p.client.CompleteMultipartUpload(ctx, bucket, key, uploadID, completeParts, minio.PutObjectOptions{})
+		return p.translateError("CompleteMultipartUpload", bucket, key, innerErr)
+	})
+	
+	p.logOperation(ctx, "CompleteMultipartUpload", bucket, key, start, err)
+	if err != nil {
+		return nil, err
+	}
+	
+	return &storage.StorageResponse{
+		Bucket:    bucket,
+		Key:       key,
+		Size:      info.Size,
+		ETag:      info.ETag,
+		VersionID: info.VersionID,
+	}, nil
 }
+
 func (p *Provider) AbortMultipartUpload(ctx context.Context, uploadID, bucket, key string) error {
-	return storage.ErrUnsupportedFeature
+	ctx, span := tracing.StartChildSpan(ctx, "MinIOProvider.AbortMultipartUpload")
+	defer span.End()
+	
+	start := time.Now()
+	
+	err := provider.WithRetry(ctx, provider.DefaultRetryConfig(), func() error {
+		innerErr := p.client.AbortMultipartUpload(ctx, bucket, key, uploadID)
+		return p.translateError("AbortMultipartUpload", bucket, key, innerErr)
+	})
+	
+	p.logOperation(ctx, "AbortMultipartUpload", bucket, key, start, err)
+	return err
 }
 func (p *Provider) ListObjectVersions(ctx context.Context, bucket, key string) ([]*storage.Object, error) {
-	return nil, storage.ErrUnsupportedFeature
+	ctx, span := tracing.StartChildSpan(ctx, "MinIOProvider.ListObjectVersions")
+	defer span.End()
+	
+	start := time.Now()
+	
+	opts := minio.ListObjectsOptions{
+		Prefix:       key,
+		WithVersions: true,
+		Recursive:    true,
+	}
+
+	var results []*storage.Object
+	for objInfo := range p.client.ListObjects(ctx, bucket, opts) {
+		if objInfo.Err != nil {
+			err := p.translateError("ListObjectVersions", bucket, key, objInfo.Err)
+			p.logOperation(ctx, "ListObjectVersions", bucket, key, start, err)
+			return nil, err
+		}
+		
+		if objInfo.Key == key {
+			results = append(results, &storage.Object{
+				Key:          objInfo.Key,
+				Bucket:       bucket,
+				Size:         objInfo.Size,
+				ETag:         objInfo.ETag,
+				LastModified: objInfo.LastModified,
+				VersionID:    objInfo.VersionID,
+				IsLatest:     objInfo.IsLatest,
+			})
+		}
+	}
+	
+	p.logOperation(ctx, "ListObjectVersions", bucket, key, start, nil)
+	return results, nil
+}
+
+func (p *Provider) Capabilities() storage.ProviderCapabilities {
+	return storage.ProviderCapabilities{
+		MultipartUpload:       true,
+		ObjectCopy:            true,
+		ObjectVersioning:      true,
+		ObjectTags:            true,
+		ObjectMetadata:        true,
+		PresignedUploadURLs:   true,
+		PresignedDownloadURLs: true,
+	}
 }
 
 // Ensure interface compliance at compile time.

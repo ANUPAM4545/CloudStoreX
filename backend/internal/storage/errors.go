@@ -17,6 +17,12 @@ var (
 	ErrInvalidRequest     = errors.New("invalid storage request")
 	ErrMultipartFailed    = errors.New("multipart upload operation failed")
 	ErrUnsupportedFeature = errors.New("provider does not support requested feature")
+	ErrAccessDenied       = errors.New("access denied")
+	ErrInvalidCredentials = errors.New("invalid credentials")
+	ErrProviderUnavailable= errors.New("provider unavailable")
+	ErrCopyFailed         = errors.New("object copy failed")
+	ErrMetadataUpdateFailed= errors.New("metadata update failed")
+	ErrTagUpdateFailed    = errors.New("tag update failed")
 )
 
 // DomainError wraps domain errors with additional operational context.

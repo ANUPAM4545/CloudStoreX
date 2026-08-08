@@ -28,6 +28,8 @@ type Service interface {
 	ListBuckets(ctx context.Context) ([]*Bucket, error)
 	GeneratePresignedUploadURL(ctx context.Context, bucket, key string, expiration time.Duration) (string, error)
 	GeneratePresignedDownloadURL(ctx context.Context, bucket, key string, expiration time.Duration) (string, error)
+	CopyObject(ctx context.Context, bucket, srcKey, destKey string) error
+	MoveObject(ctx context.Context, bucket, srcKey, destKey string) error
 
 	SearchObjects(ctx context.Context, query dto.SearchQuery) ([]dto.ObjectMetaDTO, int64, error)
 	GetObjectByID(ctx context.Context, id string) (*dto.ObjectMetaDTO, error)
@@ -114,8 +116,23 @@ func (s *defaultService) UploadObject(ctx context.Context, bucket, key string, r
 		}
 	}
 	
+	// Set Evaluation Context
+	mimeType := "application/octet-stream"
+	var tags map[string]string
+	var custom map[string]string
+	if meta != nil {
+		if meta.ContentType != "" {
+			mimeType = meta.ContentType
+		}
+		tags = meta.Tags
+		custom = meta.Custom
+	}
+	
+	evalCtx := context.WithValue(ctx, CtxKeyEvaluationMimeType, mimeType)
+	evalCtx = context.WithValue(evalCtx, CtxKeyEvaluationTags, tags)
+	
 	// Upload to Provider first
-	res, err := s.router.Upload(ctx, bucket, key, reader, size, meta)
+	res, err := s.router.Upload(evalCtx, bucket, key, reader, size, meta)
 	if err != nil {
 		s.logOperation(ctx, "UploadObject (Provider)", bucket, key, start, err)
 		return nil, err
@@ -135,17 +152,6 @@ func (s *defaultService) UploadObject(ctx context.Context, bucket, key string, r
 	if userIDStr != "" {
 		uid, _ := uuid.Parse(userIDStr)
 		ownerID = &uid
-	}
-
-	mimeType := "application/octet-stream"
-	var tags map[string]string
-	var custom map[string]string
-	if meta != nil {
-		if meta.ContentType != "" {
-			mimeType = meta.ContentType
-		}
-		tags = meta.Tags
-		custom = meta.Custom
 	}
 	
 	// Ensure ETag is grabbed from Provider response
@@ -417,5 +423,96 @@ func (s *defaultService) UntagObject(ctx context.Context, id string, keys []stri
 	err := s.metadata.UntagObject(ctx, id, keys)
 	s.logOperation(ctx, "UntagObject", "", id, start, err)
 	return err
+}
+
+func (s *defaultService) CopyObject(ctx context.Context, bucket, srcKey, destKey string) error {
+	ctx, span := tracing.StartChildSpan(ctx, "StorageService.CopyObject")
+	defer span.End()
+	span.SetAttributes(
+		attribute.String("storage.bucket", bucket),
+		attribute.String("storage.src_key", srcKey),
+		attribute.String("storage.dest_key", destKey),
+	)
+
+	start := time.Now()
+	
+	workspaceIDStr := GetContextValue(ctx, CtxKeyWorkspaceID)
+	evalCtx := ctx
+	
+	// Pre-fetch metadata to populate EvaluationContext for CopyObject
+	bucketMeta, err := s.metadata.FindBucketByName(ctx, workspaceIDStr, bucket)
+	if err == nil {
+		if srcMeta, err := s.metadata.FindObjectByKey(ctx, bucketMeta.ID.String(), srcKey); err == nil {
+			evalCtx = context.WithValue(evalCtx, CtxKeyEvaluationMimeType, srcMeta.MimeType)
+			
+			t := make(map[string]string)
+			for _, tag := range srcMeta.Tags {
+				t[tag.Key] = tag.Value
+			}
+			evalCtx = context.WithValue(evalCtx, CtxKeyEvaluationTags, t)
+		}
+	}
+
+	// Delegate copy to router/provider
+	_, err = s.router.CopyObject(evalCtx, bucket, srcKey, bucket, destKey)
+	if err != nil {
+		s.logOperation(ctx, "CopyObject (Provider)", bucket, srcKey, start, err)
+		return err
+	}
+
+	// Update metadata: find source, copy metadata to dest (this logic can be further enhanced)
+	workspaceIDStr = GetContextValue(ctx, CtxKeyWorkspaceID)
+	bucketMeta, err = s.metadata.FindBucketByName(ctx, workspaceIDStr, bucket)
+	if err == nil {
+		srcMeta, err := s.metadata.FindObjectByKey(ctx, bucketMeta.ID.String(), srcKey)
+		if err == nil {
+			var ownerID *uuid.UUID
+			if srcMeta.OwnerID != nil {
+				ownerID = srcMeta.OwnerID
+			}
+			t := make(map[string]string)
+			for _, tag := range srcMeta.Tags {
+				t[tag.Key] = tag.Value
+			}
+			m := make(map[string]string)
+			for _, meta := range srcMeta.Metadata {
+				m[meta.Key] = meta.Value
+			}
+			
+			_, _ = s.metadata.CreateObjectMetadata(ctx, workspaceIDStr, bucketMeta.ID, destKey, destKey, srcMeta.SizeBytes, srcMeta.MimeType, srcMeta.ETag, srcMeta.ProviderID, ownerID, t, m)
+		}
+	}
+
+	s.logOperation(ctx, "CopyObject", bucket, srcKey, start, nil)
+	return nil
+}
+
+func (s *defaultService) MoveObject(ctx context.Context, bucket, srcKey, destKey string) error {
+	ctx, span := tracing.StartChildSpan(ctx, "StorageService.MoveObject")
+	defer span.End()
+	span.SetAttributes(
+		attribute.String("storage.bucket", bucket),
+		attribute.String("storage.src_key", srcKey),
+		attribute.String("storage.dest_key", destKey),
+	)
+
+	start := time.Now()
+
+	// 1. CopyObject
+	err := s.CopyObject(ctx, bucket, srcKey, destKey)
+	if err != nil {
+		s.logOperation(ctx, "MoveObject (Copy)", bucket, srcKey, start, err)
+		return err
+	}
+
+	// 2. Delete original object
+	err = s.DeleteObject(ctx, bucket, srcKey)
+	if err != nil {
+		s.logOperation(ctx, "MoveObject (Delete Src)", bucket, srcKey, start, err)
+		return err
+	}
+
+	s.logOperation(ctx, "MoveObject", bucket, srcKey, start, nil)
+	return nil
 }
 

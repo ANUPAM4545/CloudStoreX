@@ -11,13 +11,16 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/cloudstorex/backend/internal/observability/tracing"
+	"github.com/cloudstorex/backend/internal/provider"
 	"github.com/cloudstorex/backend/internal/storage"
 )
 
 type Provider struct {
-	client *s3.Client
-	logger *slog.Logger
-	bucket string
+	client        *s3.Client
+	presignClient *s3.PresignClient
+	logger        *slog.Logger
 }
 
 type Config struct {
@@ -56,9 +59,75 @@ func NewProvider(ctx context.Context, cfg *Config, logger *slog.Logger) (storage
 	})
 
 	return &Provider{
-		client: client,
-		logger: logger,
+		client:        client,
+		presignClient: s3.NewPresignClient(client),
+		logger:        logger,
 	}, nil
+}
+
+func (p *Provider) translateError(op, bucket, key string, err error) error {
+	if err == nil {
+		return nil
+	}
+	
+	// Fast path for context errors
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return storage.NewDomainError(op, "aws", bucket, key, err)
+	}
+
+	var apiErr interface {
+		ErrorCode() string
+		ErrorMessage() string
+	}
+	if errors.As(err, &apiErr) {
+		switch apiErr.ErrorCode() {
+		case "NoSuchKey", "NotFound":
+			return storage.NewDomainError(op, "aws", bucket, key, storage.ErrObjectNotFound)
+		case "NoSuchBucket":
+			return storage.NewDomainError(op, "aws", bucket, key, storage.ErrBucketNotFound)
+		case "BucketAlreadyExists", "BucketAlreadyOwnedByYou":
+			return storage.NewDomainError(op, "aws", bucket, key, storage.ErrBucketExists)
+		case "AccessDenied":
+			return storage.NewDomainError(op, "aws", bucket, key, storage.ErrAccessDenied)
+		case "InvalidAccessKeyId", "SignatureDoesNotMatch":
+			return storage.NewDomainError(op, "aws", bucket, key, storage.ErrInvalidCredentials)
+		case "ServiceUnavailable", "InternalError":
+			return storage.NewDomainError(op, "aws", bucket, key, storage.ErrProviderUnavailable)
+		}
+	}
+	
+	switch op {
+	case "Upload":
+		return storage.NewDomainError(op, "aws", bucket, key, storage.ErrUploadFailed)
+	case "Download":
+		return storage.NewDomainError(op, "aws", bucket, key, storage.ErrDownloadFailed)
+	case "Delete":
+		return storage.NewDomainError(op, "aws", bucket, key, storage.ErrDeleteFailed)
+	}
+	return storage.NewDomainError(op, "aws", bucket, key, err)
+}
+
+func (p *Provider) logOperation(ctx context.Context, op, bucket, key string, start time.Time, err error) {
+	duration := time.Since(start)
+	level := slog.LevelInfo
+	result := "success"
+	var errStr string
+
+	if err != nil {
+		level = slog.LevelError
+		result = "error"
+		errStr = err.Error()
+	}
+
+	p.logger.Log(ctx, level, "AWS Provider Operation",
+		slog.String("provider", "aws"),
+		slog.String("bucket", bucket),
+		slog.String("key", key),
+		slog.String("op", op),
+		slog.Duration("duration", duration),
+		slog.String("result", result),
+		slog.String("error", errStr),
+	)
 }
 
 // Bucket Operations
@@ -186,53 +255,438 @@ func (p *Provider) ListObjects(ctx context.Context, bucket, prefix string) ([]*s
 }
 
 func (p *Provider) GeneratePresignedDownloadURL(ctx context.Context, bucket, key string, expiration time.Duration) (string, error) {
-	return "", errors.New("not implemented")
+	ctx, span := tracing.StartChildSpan(ctx, "AWSProvider.GeneratePresignedDownloadURL")
+	defer span.End()
+	
+	start := time.Now()
+
+	input := &s3.GetObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key),
+	}
+
+	req, err := p.presignClient.PresignGetObject(ctx, input, func(o *s3.PresignOptions) {
+		o.Expires = expiration
+	})
+	
+	if err != nil {
+		err = p.translateError("GeneratePresignedDownloadURL", bucket, key, err)
+	}
+	
+	p.logOperation(ctx, "GeneratePresignedDownloadURL", bucket, key, start, err)
+	if err != nil {
+		return "", err
+	}
+	return req.URL, nil
 }
 
 func (p *Provider) GeneratePresignedUploadURL(ctx context.Context, bucket, key string, expiration time.Duration) (string, error) {
-	return "", errors.New("not implemented")
+	ctx, span := tracing.StartChildSpan(ctx, "AWSProvider.GeneratePresignedUploadURL")
+	defer span.End()
+	
+	start := time.Now()
+
+	input := &s3.PutObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key),
+	}
+
+	req, err := p.presignClient.PresignPutObject(ctx, input, func(o *s3.PresignOptions) {
+		o.Expires = expiration
+	})
+	
+	if err != nil {
+		err = p.translateError("GeneratePresignedUploadURL", bucket, key, err)
+	}
+	
+	p.logOperation(ctx, "GeneratePresignedUploadURL", bucket, key, start, err)
+	if err != nil {
+		return "", err
+	}
+	return req.URL, nil
 }
 
 func (p *Provider) CopyObject(ctx context.Context, srcBucket, srcKey, destBucket, destKey string) (*storage.StorageResponse, error) {
-	return nil, errors.New("not implemented")
+	ctx, span := tracing.StartChildSpan(ctx, "AWSProvider.CopyObject")
+	defer span.End()
+	
+	start := time.Now()
+	copySource := aws.String(srcBucket + "/" + srcKey)
+	
+	input := &s3.CopyObjectInput{
+		Bucket:     aws.String(destBucket),
+		Key:        aws.String(destKey),
+		CopySource: copySource,
+	}
+
+	var out *s3.CopyObjectOutput
+	err := provider.WithRetry(ctx, provider.DefaultRetryConfig(), func() error {
+		var innerErr error
+		out, innerErr = p.client.CopyObject(ctx, input)
+		return p.translateError("CopyObject", destBucket, destKey, innerErr)
+	})
+	
+	p.logOperation(ctx, "CopyObject", destBucket, destKey, start, err)
+	if err != nil {
+		return nil, err
+	}
+	
+	var versionID string
+	if out.VersionId != nil {
+		versionID = *out.VersionId
+	}
+	
+	etag := ""
+	if out.CopyObjectResult != nil && out.CopyObjectResult.ETag != nil {
+		etag = *out.CopyObjectResult.ETag
+	}
+
+	return &storage.StorageResponse{
+		Bucket:    destBucket,
+		Key:       destKey,
+		ETag:      etag,
+		VersionID: versionID,
+	}, nil
 }
 
-func (p *Provider) MoveObject(ctx context.Context, srcBucket, srcKey, destBucket, destKey string) (*storage.StorageResponse, error) {
-	return nil, errors.New("not implemented")
-}
+
 
 func (p *Provider) GetObjectMetadata(ctx context.Context, bucket, key string) (*storage.ObjectMetadata, error) {
-	return nil, errors.New("not implemented")
+	ctx, span := tracing.StartChildSpan(ctx, "AWSProvider.GetObjectMetadata")
+	defer span.End()
+	
+	start := time.Now()
+	
+	input := &s3.HeadObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key),
+	}
+	
+	var out *s3.HeadObjectOutput
+	err := provider.WithRetry(ctx, provider.DefaultRetryConfig(), func() error {
+		var innerErr error
+		out, innerErr = p.client.HeadObject(ctx, input)
+		return p.translateError("GetObjectMetadata", bucket, key, innerErr)
+	})
+	
+	p.logOperation(ctx, "GetObjectMetadata", bucket, key, start, err)
+	if err != nil {
+		return nil, err
+	}
+	
+	contentType := ""
+	if out.ContentType != nil {
+		contentType = *out.ContentType
+	}
+	
+	var versionID string
+	if out.VersionId != nil {
+		versionID = *out.VersionId
+	}
+	
+	return &storage.ObjectMetadata{
+		ContentType: contentType,
+		Custom:      out.Metadata,
+		VersionID:   versionID,
+	}, nil
 }
 
 func (p *Provider) SetObjectMetadata(ctx context.Context, bucket, key string, meta *storage.ObjectMetadata) error {
-	return errors.New("not implemented")
+	ctx, span := tracing.StartChildSpan(ctx, "AWSProvider.SetObjectMetadata")
+	defer span.End()
+	
+	start := time.Now()
+	
+	// S3 requires a CopyObject to self with REPLACE directive to update metadata
+	copySource := aws.String(bucket + "/" + key)
+	contentType := "application/octet-stream"
+	var metaMap map[string]string
+	
+	if meta != nil {
+		if meta.ContentType != "" {
+			contentType = meta.ContentType
+		}
+		if meta.Custom != nil {
+			metaMap = meta.Custom
+		}
+	}
+	
+	input := &s3.CopyObjectInput{
+		Bucket:            aws.String(bucket),
+		Key:               aws.String(key),
+		CopySource:        copySource,
+		MetadataDirective: types.MetadataDirectiveReplace,
+		ContentType:       aws.String(contentType),
+		Metadata:          metaMap,
+	}
+	
+	err := provider.WithRetry(ctx, provider.DefaultRetryConfig(), func() error {
+		_, innerErr := p.client.CopyObject(ctx, input)
+		return p.translateError("SetObjectMetadata", bucket, key, innerErr)
+	})
+	
+	p.logOperation(ctx, "SetObjectMetadata", bucket, key, start, err)
+	return err
 }
 
 func (p *Provider) GetObjectTags(ctx context.Context, bucket, key string) (map[string]string, error) {
-	return nil, errors.New("not implemented")
+	ctx, span := tracing.StartChildSpan(ctx, "AWSProvider.GetObjectTags")
+	defer span.End()
+	
+	start := time.Now()
+	
+	input := &s3.GetObjectTaggingInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key),
+	}
+	
+	var out *s3.GetObjectTaggingOutput
+	err := provider.WithRetry(ctx, provider.DefaultRetryConfig(), func() error {
+		var innerErr error
+		out, innerErr = p.client.GetObjectTagging(ctx, input)
+		return p.translateError("GetObjectTags", bucket, key, innerErr)
+	})
+	
+	p.logOperation(ctx, "GetObjectTags", bucket, key, start, err)
+	if err != nil {
+		return nil, err
+	}
+	
+	tags := make(map[string]string)
+	for _, t := range out.TagSet {
+		if t.Key != nil && t.Value != nil {
+			tags[*t.Key] = *t.Value
+		}
+	}
+	
+	return tags, nil
 }
 
 func (p *Provider) SetObjectTags(ctx context.Context, bucket, key string, tags map[string]string) error {
-	return errors.New("not implemented")
+	ctx, span := tracing.StartChildSpan(ctx, "AWSProvider.SetObjectTags")
+	defer span.End()
+	
+	start := time.Now()
+	
+	var tagSet []types.Tag
+	for k, v := range tags {
+		tagSet = append(tagSet, types.Tag{
+			Key:   aws.String(k),
+			Value: aws.String(v),
+		})
+	}
+	
+	input := &s3.PutObjectTaggingInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key),
+		Tagging: &types.Tagging{
+			TagSet: tagSet,
+		},
+	}
+	
+	err := provider.WithRetry(ctx, provider.DefaultRetryConfig(), func() error {
+		_, innerErr := p.client.PutObjectTagging(ctx, input)
+		return p.translateError("SetObjectTags", bucket, key, innerErr)
+	})
+	
+	p.logOperation(ctx, "SetObjectTags", bucket, key, start, err)
+	return err
 }
 
 func (p *Provider) CreateMultipartUpload(ctx context.Context, bucket, key string, meta *storage.ObjectMetadata) (*storage.MultipartUpload, error) {
-	return nil, errors.New("not implemented")
+	ctx, span := tracing.StartChildSpan(ctx, "AWSProvider.CreateMultipartUpload")
+	defer span.End()
+	
+	start := time.Now()
+	
+	contentType := "application/octet-stream"
+	var metaMap map[string]string
+	if meta != nil {
+		if meta.ContentType != "" {
+			contentType = meta.ContentType
+		}
+		// S3 handles tags via x-amz-tagging, but it's typically set during CreateMultipartUpload or SetObjectTags
+		if meta.Custom != nil {
+			metaMap = meta.Custom
+		}
+	}
+
+	input := &s3.CreateMultipartUploadInput{
+		Bucket:      aws.String(bucket),
+		Key:         aws.String(key),
+		ContentType: aws.String(contentType),
+		Metadata:    metaMap,
+	}
+	
+	var out *s3.CreateMultipartUploadOutput
+	err := provider.WithRetry(ctx, provider.DefaultRetryConfig(), func() error {
+		var innerErr error
+		out, innerErr = p.client.CreateMultipartUpload(ctx, input)
+		return p.translateError("CreateMultipartUpload", bucket, key, innerErr)
+	})
+	
+	p.logOperation(ctx, "CreateMultipartUpload", bucket, key, start, err)
+	if err != nil {
+		return nil, err
+	}
+	
+	return &storage.MultipartUpload{
+		UploadID: *out.UploadId,
+		Bucket:   bucket,
+		Key:      key,
+	}, nil
 }
 
 func (p *Provider) UploadPart(ctx context.Context, uploadID, bucket, key string, partNumber int, reader io.Reader, size int64) (*storage.UploadPart, error) {
-	return nil, errors.New("not implemented")
+	ctx, span := tracing.StartChildSpan(ctx, "AWSProvider.UploadPart")
+	defer span.End()
+	
+	start := time.Now()
+	
+	input := &s3.UploadPartInput{
+		Bucket:        aws.String(bucket),
+		Key:           aws.String(key),
+		PartNumber:    aws.Int32(int32(partNumber)),
+		UploadId:      aws.String(uploadID),
+		Body:          reader,
+		ContentLength: aws.Int64(size),
+	}
+	
+	var out *s3.UploadPartOutput
+	err := provider.WithRetry(ctx, provider.DefaultRetryConfig(), func() error {
+		var innerErr error
+		out, innerErr = p.client.UploadPart(ctx, input)
+		return p.translateError("UploadPart", bucket, key, innerErr)
+	})
+	
+	p.logOperation(ctx, "UploadPart", bucket, key, start, err)
+	if err != nil {
+		return nil, err
+	}
+
+	return &storage.UploadPart{
+		PartNumber: partNumber,
+		ETag:       *out.ETag,
+		Size:       size,
+	}, nil
 }
 
 func (p *Provider) CompleteMultipartUpload(ctx context.Context, uploadID, bucket, key string, parts []*storage.UploadPart) (*storage.StorageResponse, error) {
-	return nil, errors.New("not implemented")
+	ctx, span := tracing.StartChildSpan(ctx, "AWSProvider.CompleteMultipartUpload")
+	defer span.End()
+	
+	start := time.Now()
+	
+	var completedParts []types.CompletedPart
+	for _, part := range parts {
+		completedParts = append(completedParts, types.CompletedPart{
+			ETag:       aws.String(part.ETag),
+			PartNumber: aws.Int32(int32(part.PartNumber)),
+		})
+	}
+	
+	input := &s3.CompleteMultipartUploadInput{
+		Bucket:   aws.String(bucket),
+		Key:      aws.String(key),
+		UploadId: aws.String(uploadID),
+		MultipartUpload: &types.CompletedMultipartUpload{
+			Parts: completedParts,
+		},
+	}
+	
+	var out *s3.CompleteMultipartUploadOutput
+	err := provider.WithRetry(ctx, provider.DefaultRetryConfig(), func() error {
+		var innerErr error
+		out, innerErr = p.client.CompleteMultipartUpload(ctx, input)
+		return p.translateError("CompleteMultipartUpload", bucket, key, innerErr)
+	})
+	
+	p.logOperation(ctx, "CompleteMultipartUpload", bucket, key, start, err)
+	if err != nil {
+		return nil, err
+	}
+	
+	var versionID string
+	if out.VersionId != nil {
+		versionID = *out.VersionId
+	}
+	
+	return &storage.StorageResponse{
+		Bucket:    bucket,
+		Key:       key,
+		ETag:      *out.ETag,
+		VersionID: versionID,
+	}, nil
 }
 
 func (p *Provider) AbortMultipartUpload(ctx context.Context, uploadID, bucket, key string) error {
-	return errors.New("not implemented")
+	ctx, span := tracing.StartChildSpan(ctx, "AWSProvider.AbortMultipartUpload")
+	defer span.End()
+	
+	start := time.Now()
+	
+	input := &s3.AbortMultipartUploadInput{
+		Bucket:   aws.String(bucket),
+		Key:      aws.String(key),
+		UploadId: aws.String(uploadID),
+	}
+	
+	err := provider.WithRetry(ctx, provider.DefaultRetryConfig(), func() error {
+		_, innerErr := p.client.AbortMultipartUpload(ctx, input)
+		return p.translateError("AbortMultipartUpload", bucket, key, innerErr)
+	})
+	
+	p.logOperation(ctx, "AbortMultipartUpload", bucket, key, start, err)
+	return err
 }
 
 func (p *Provider) ListObjectVersions(ctx context.Context, bucket, key string) ([]*storage.Object, error) {
-	return nil, errors.New("not implemented")
+	ctx, span := tracing.StartChildSpan(ctx, "AWSProvider.ListObjectVersions")
+	defer span.End()
+	
+	start := time.Now()
+	
+	input := &s3.ListObjectVersionsInput{
+		Bucket: aws.String(bucket),
+		Prefix: aws.String(key),
+	}
+	
+	var out *s3.ListObjectVersionsOutput
+	err := provider.WithRetry(ctx, provider.DefaultRetryConfig(), func() error {
+		var innerErr error
+		out, innerErr = p.client.ListObjectVersions(ctx, input)
+		return p.translateError("ListObjectVersions", bucket, key, innerErr)
+	})
+	
+	p.logOperation(ctx, "ListObjectVersions", bucket, key, start, err)
+	if err != nil {
+		return nil, err
+	}
+	
+	var versions []*storage.Object
+	for _, v := range out.Versions {
+		if v.Key != nil && *v.Key == key {
+			versions = append(versions, &storage.Object{
+				Key:          *v.Key,
+				Size:         *v.Size,
+				LastModified: *v.LastModified,
+				VersionID:    *v.VersionId,
+				IsLatest:     *v.IsLatest,
+			})
+		}
+	}
+	
+	return versions, nil
+}
+
+func (p *Provider) Capabilities() storage.ProviderCapabilities {
+	return storage.ProviderCapabilities{
+		MultipartUpload:       true,
+		ObjectCopy:            true,
+		ObjectVersioning:      true,
+		ObjectTags:            true,
+		ObjectMetadata:        true,
+		PresignedUploadURLs:   true,
+		PresignedDownloadURLs: true,
+	}
 }

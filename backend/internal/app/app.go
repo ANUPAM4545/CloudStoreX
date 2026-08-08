@@ -18,17 +18,29 @@ import (
 	"github.com/cloudstorex/backend/internal/config"
 	"github.com/cloudstorex/backend/internal/database"
 	"github.com/cloudstorex/backend/internal/identity"
+
+	"github.com/cloudstorex/backend/internal/ai"
+	"github.com/cloudstorex/backend/internal/ai/prompts"
+	"github.com/cloudstorex/backend/internal/ai/providers/anthropic"
+	"github.com/cloudstorex/backend/internal/ai/providers/gemini"
+	"github.com/cloudstorex/backend/internal/ai/providers/openai"
+
+	"github.com/cloudstorex/backend/internal/security/abac"
+	authEnginePkg "github.com/cloudstorex/backend/internal/security/engine"
+	"github.com/cloudstorex/backend/internal/security/rbac"
+	"github.com/cloudstorex/backend/internal/security/zerotrust"
 	"github.com/cloudstorex/backend/internal/jobs"
 	"github.com/cloudstorex/backend/internal/lifecycle"
 	"github.com/cloudstorex/backend/internal/middleware"
+	"github.com/cloudstorex/backend/internal/metadata/cache"
 	"github.com/cloudstorex/backend/internal/metadata/events"
+	metadataHandlerPkg "github.com/cloudstorex/backend/internal/metadata/handler"
 	"github.com/cloudstorex/backend/internal/metadata/repository"
 	"github.com/cloudstorex/backend/internal/metadata/service"
 	"github.com/cloudstorex/backend/internal/policy/engine"
 	policyEvents "github.com/cloudstorex/backend/internal/policy/events"
 	policyHandlerPkg "github.com/cloudstorex/backend/internal/policy/handler"
 	policyRepo "github.com/cloudstorex/backend/internal/policy/repository"
-	"github.com/cloudstorex/backend/internal/policy/rules"
 	policySvc "github.com/cloudstorex/backend/internal/policy/service"
 	"github.com/cloudstorex/backend/internal/provider"
 	"github.com/cloudstorex/backend/internal/provider/aws"
@@ -57,13 +69,17 @@ type App struct {
 	ProviderService providerSvc.ProviderService
 	StorageRouter   storage.Router
 	StorageService   storage.Service
+	MetadataService  service.MetadataService
 	PolicyService    policySvc.PolicyService
+	PolicyEngine     engine.PolicyEngine
 	QuotaService     quota.Service
 	LifecycleService lifecycle.Service
 	AuditService     audit.Service
 	AnalyticsService analytics.Service
 	JobClient        jobs.Client
 	JobDispatcher   jobs.Dispatcher
+	AIManager       ai.AIManager
+	PromptManager   prompts.Manager
 	Router          *gin.Engine
 }
 
@@ -108,7 +124,8 @@ func NewApp() (*App, error) {
 
 	// Sync MinIO from config to DB (if not exists)
 	ctx := context.Background()
-	defaultWorkspaceID := uuid.MustParse("00000000-0000-0000-0000-000000000000") // TODO: use real workspace ID logic later
+	// Default workspace ID used for system bootstrap
+	defaultWorkspaceID := uuid.MustParse("00000000-0000-0000-0000-000000000000")
 	_, err = providerService.GetDefaultProvider(ctx, defaultWorkspaceID.String())
 	if err != nil && errors.Is(err, storage.ErrProviderNotFound) {
 		providerService.CreateProvider(ctx, dto.CreateProviderRequest{
@@ -156,7 +173,7 @@ func NewApp() (*App, error) {
 		}
 
 		// Sync AWS to DB
-		_, err = providerService.GetDefaultProvider(ctx, defaultWorkspaceID.String())
+		_, _ = providerService.GetDefaultProvider(ctx, defaultWorkspaceID.String())
 		// If AWS doesn't exist, we should probably fetch by name to avoid recreating.
 		// Since we changed GetByName to require workspace_id, we'll just check if we have an AWS provider.
 		awsProviders, _ := providerService.ListProviders(ctx, defaultWorkspaceID.String())
@@ -182,13 +199,12 @@ func NewApp() (*App, error) {
 
 	policyRepository := policyRepo.NewPostgresRepository(db)
 	policyService := policySvc.NewPolicyService(policyRepository)
-	policyRuleRegistry := rules.NewRegistry()
-	policyRuleRegistry.Register(&rules.DefaultRule{})
-	policyRuleRegistry.Register(&rules.RegionRule{})
-	policyRuleRegistry.Register(&rules.ObjectSizeRule{})
-	policyEngineEvaluator := engine.NewEvaluator(policyRuleRegistry)
-	policyEventPub := policyEvents.NewLogPublisher(logger.Log)
-	policyEngine := engine.NewPolicyEngine(policyRepository, policyEngineEvaluator, providerService, policyEventPub)
+	
+	policyEngineEvaluator := engine.NewEvaluator()
+	policyEventPub := policyEvents.NewLogPublisher(logger.Log, policyRepository)
+	
+	policyProviderValidator := storage.NewProviderValidator(storageRegistry)
+	policyEngine := engine.NewPolicyEngine(policyRepository, policyEngineEvaluator, providerService, policyProviderValidator, policyEventPub)
 
 	storageRouter := storage.NewRouter(storageRegistry, policyEngine)
 
@@ -196,9 +212,10 @@ func NewApp() (*App, error) {
 	jobClient := jobs.NewClient(db, redisClient)
 	jobDispatcher := jobs.NewDispatcher(db, redisClient, jobRegistry, 5)
 
+	metadataCache := cache.NewRedisMetadataCache(redisClient)
 	metadataRepo := repository.NewPostgresMetadataRepository(db)
 	metadataEvents := events.NewJobEventPublisher(jobClient, logger.Log)
-	metadataService := service.NewMetadataService(metadataRepo, metadataEvents)
+	metadataService := service.NewMetadataService(metadataRepo, metadataEvents, metadataCache)
 
 	quotaRepo := quota.NewPostgresRepository(db)
 	quotaService := quota.NewService(quotaRepo, logger.Log)
@@ -213,6 +230,29 @@ func NewApp() (*App, error) {
 
 	analyticsRepo := analytics.NewPostgresRepository(db)
 	analyticsService := analytics.NewService(analyticsRepo, logger.Log)
+
+	// Initialize AI Provider Abstraction
+	aiManager := ai.NewManager(ai.ProviderType(cfg.AIDefaultProvider), logger.Log)
+	
+	if cfg.OpenAIApiKey != "" {
+		aiManager.RegisterProvider(openai.NewProvider(cfg.OpenAIApiKey))
+	}
+	if cfg.AnthropicApiKey != "" {
+		aiManager.RegisterProvider(anthropic.NewProvider(cfg.AnthropicApiKey))
+	}
+	if cfg.GeminiApiKey != "" {
+		geminiProv, err := gemini.NewProvider(context.Background(), cfg.GeminiApiKey)
+		if err == nil {
+			aiManager.RegisterProvider(geminiProv)
+		} else {
+			logger.Log.Warn("Failed to initialize Gemini provider", slog.String("error", err.Error()))
+		}
+	}
+
+	promptManager, err := prompts.NewManager()
+	if err != nil {
+		logger.Log.Warn("Failed to initialize prompt manager", slog.String("error", err.Error()))
+	}
 
 	// Register Jobs
 	jobRegistry.Register("ProcessEvent", workers.NewEventIntegrationWorker(quotaService, logger.Log))
@@ -230,13 +270,17 @@ func NewApp() (*App, error) {
 		ProviderService: providerService,
 		StorageRouter:    storageRouter,
 		StorageService:   storageService,
+		MetadataService:  metadataService,
 		PolicyService:    policyService,
+		PolicyEngine:     policyEngine,
 		QuotaService:     quotaService,
 		LifecycleService: lifecycleService,
 		AuditService:     auditService,
 		AnalyticsService: analyticsService,
 		JobClient:        jobClient,
 		JobDispatcher:   jobDispatcher,
+		AIManager:       aiManager,
+		PromptManager:   promptManager,
 		Router:          gin.New(), // Create without default middlewares
 	}
 
@@ -366,9 +410,10 @@ func (a *App) setupRoutes() {
 	v1.POST("/providers/:id/disable", providerHandler.DisableProvider)
 
 	// Policy routes
-	policyHandler := policyHandlerPkg.NewHandler(a.PolicyService)
+	policyHandler := policyHandlerPkg.NewHandler(a.PolicyService, a.PolicyEngine)
 	v1.GET("/policies", policyHandler.ListPolicies)
 	v1.POST("/policies", policyHandler.CreatePolicy)
+	v1.POST("/policies/evaluate", policyHandler.Evaluate)
 	v1.GET("/policies/:id", policyHandler.GetPolicy)
 	v1.PUT("/policies/:id", policyHandler.UpdatePolicy)
 	v1.DELETE("/policies/:id", policyHandler.DeletePolicy)
@@ -388,6 +433,9 @@ func (a *App) setupRoutes() {
 		}
 	}
 	tokenService := identity.NewTokenService(jwtSecret)
+	
+	authEngine := authEnginePkg.NewAuthorizationEngine(rbac.NewEvaluator(), abac.NewEvaluator(), zerotrust.NewEvaluator())
+
 	identityRepo := identity.NewRepository(a.DB)
 	identityService := identity.NewService(identityRepo, tokenService)
 	identityHandler := identity.NewHandler(identityService)
@@ -400,7 +448,7 @@ func (a *App) setupRoutes() {
 		
 		// Protected test route
 		protected := auth.Group("/me")
-		protected.Use(middleware.AuthMiddleware(tokenService))
+		protected.Use(middleware.AuthMiddleware(tokenService, authEngine))
 		protected.GET("", func(c *gin.Context) {
 			userID, _ := c.Get("user_id")
 			response.Success(c, http.StatusOK, gin.H{"user_id": userID})
@@ -410,7 +458,7 @@ func (a *App) setupRoutes() {
 	// Storage routes (protected by auth middleware)
 	storageHandler := storage.NewHandler(a.StorageService, maxUploadSizeMB)
 	storageGroup := v1.Group("/storage")
-	storageGroup.Use(middleware.AuthMiddleware(tokenService))
+	storageGroup.Use(middleware.AuthMiddleware(tokenService, authEngine))
 	{
 		// Bucket APIs
 		storageGroup.POST("/buckets", storageHandler.CreateBucket)
@@ -438,10 +486,14 @@ func (a *App) setupRoutes() {
 		storageGroup.POST("/objects/:id/retention", storageHandler.SetRetention)
 	}
 
+	// Metadata APIs
+	metadataHandler := metadataHandlerPkg.NewMetadataHandler(a.MetadataService)
+	metadataHandler.RegisterRoutes(v1)
+
 	// Quota APIs
 	quotaHandler := quota.NewHandler(a.QuotaService)
 	quotaGroup := v1.Group("/quotas")
-	quotaGroup.Use(middleware.AuthMiddleware(tokenService))
+	quotaGroup.Use(middleware.AuthMiddleware(tokenService, authEngine))
 	{
 		quotaGroup.POST("/workspaces/:workspace_id", quotaHandler.SetWorkspaceQuota)
 		quotaGroup.GET("/workspaces/:workspace_id", quotaHandler.GetWorkspaceQuota)
@@ -450,7 +502,7 @@ func (a *App) setupRoutes() {
 	// Lifecycle APIs
 	lifecycleHandler := lifecycle.NewHandler(a.LifecycleService)
 	lifecycleGroup := v1.Group("/lifecycle")
-	lifecycleGroup.Use(middleware.AuthMiddleware(tokenService))
+	lifecycleGroup.Use(middleware.AuthMiddleware(tokenService, authEngine))
 	{
 		lifecycleGroup.POST("/buckets/:bucket_id/rules", lifecycleHandler.CreateRule)
 		lifecycleGroup.GET("/buckets/:bucket_id/rules", lifecycleHandler.ListRules)
@@ -460,7 +512,7 @@ func (a *App) setupRoutes() {
 	// Audit APIs
 	auditHandler := audit.NewHandler(a.AuditService)
 	auditGroup := v1.Group("/audit-logs")
-	auditGroup.Use(middleware.AuthMiddleware(tokenService))
+	auditGroup.Use(middleware.AuthMiddleware(tokenService, authEngine))
 	{
 		auditGroup.GET("/workspaces/:workspace_id", auditHandler.ListLogs)
 	}
@@ -468,7 +520,7 @@ func (a *App) setupRoutes() {
 	// Analytics APIs
 	analyticsHandler := analytics.NewHandler(a.AnalyticsService)
 	analyticsGroup := v1.Group("/analytics")
-	analyticsGroup.Use(middleware.AuthMiddleware(tokenService))
+	analyticsGroup.Use(middleware.AuthMiddleware(tokenService, authEngine))
 	{
 		analyticsGroup.GET("/workspaces/:workspace_id/history", analyticsHandler.GetAnalyticsHistory)
 		analyticsGroup.GET("/workspaces/:workspace_id/latest", analyticsHandler.GetLatestMetrics)

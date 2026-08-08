@@ -265,6 +265,167 @@ var (
 			Help: "Current memory allocated bytes.",
 		},
 	)
+
+	// ==========================================
+	// 8. Reliability & Resilience Metrics
+	// ==========================================
+	ReliabilityReplicationBytesTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "cloudstorex_reliability_replication_bytes_total",
+		Help: "Total bytes replicated across providers",
+	}, []string{"workspace", "source_provider", "target_provider"})
+
+	// Security Metrics (Epic 14)
+	SecurityAuthenticationAttemptsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "cloudstorex_security_authentication_attempts_total",
+		Help: "Total number of authentication attempts",
+	}, []string{"provider", "status"})
+
+	SecurityLoginFailuresTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "cloudstorex_security_login_failures_total",
+		Help: "Total number of failed login attempts",
+	}, []string{"provider", "reason"})
+
+	SecurityMFAChallengesTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "cloudstorex_security_mfa_challenges_total",
+		Help: "Total number of MFA challenges issued",
+	}, []string{"status"})
+
+	SecurityActiveSessionsTotal = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "cloudstorex_security_active_sessions_total",
+		Help: "Total number of active user sessions",
+	}, []string{"organization"})
+
+	SecurityAPIKeyRequestsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "cloudstorex_security_api_key_requests_total",
+		Help: "Total number of requests authenticated via API Key",
+	}, []string{"workspace"})
+
+	SecurityAuthorizationDenialsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "cloudstorex_security_authorization_denials_total",
+		Help: "Total number of denied authorization attempts",
+	}, []string{"reason"})
+
+	SecurityPolicyEvaluationsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "cloudstorex_security_policy_evaluations_total",
+		Help: "Total number of security policy evaluations",
+	}, []string{"policy_type", "result"})
+
+	// AI Metrics (Epic 15)
+	AIProviderRequestsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "cloudstorex_ai_provider_requests_total",
+		Help: "Total number of requests to the AI Provider",
+	}, []string{"provider", "model", "status"})
+
+	AIProviderLatency = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Name: "cloudstorex_ai_provider_latency_seconds",
+		Help: "Latency of AI Provider inferences",
+		Buckets: []float64{0.1, 0.5, 1, 2, 5, 10, 30},
+	}, []string{"provider", "model"})
+
+	AIProviderCostTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "cloudstorex_ai_provider_cost_total",
+		Help: "Estimated total cost of AI usage in USD",
+	}, []string{"provider", "model"})
+
+	AICacheHitsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "cloudstorex_ai_cache_hits_total",
+		Help: "Total AI cache hits",
+	}, []string{"type"})
+
+	AIGuardrailBlocksTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "cloudstorex_ai_guardrail_blocks_total",
+		Help: "Total AI interactions blocked by guardrails",
+	}, []string{"reason"})
+
+	ReliabilityReplicationErrorsTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "cloudstorex_reliability_replication_errors_total",
+			Help: "Total replication errors.",
+		},
+		[]string{"workspace", "source_provider", "target_provider"},
+	)
+
+	ReliabilityReplicationLagSeconds = promauto.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "cloudstorex_reliability_replication_lag_seconds",
+			Help:    "Cross-region replication lag in seconds.",
+			Buckets: prometheus.DefBuckets,
+		},
+		[]string{"workspace", "source_provider", "target_provider"},
+	)
+
+	ReliabilityBackupBytesTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "cloudstorex_reliability_backup_bytes_total",
+			Help: "Total bytes backed up to cold storage.",
+		},
+		[]string{"workspace", "provider"},
+	)
+
+	ReliabilityBackupErrorsTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "cloudstorex_reliability_backup_errors_total",
+			Help: "Total backup job errors.",
+		},
+		[]string{"workspace", "provider"},
+	)
+
+	ReliabilityRestoreBytesTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "cloudstorex_reliability_restore_bytes_total",
+			Help: "Total bytes restored from cold storage.",
+		},
+		[]string{"workspace", "provider"},
+	)
+
+	ReliabilityFailoversTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "cloudstorex_reliability_failovers_total",
+			Help: "Total automatic failovers triggered.",
+		},
+		[]string{"provider", "status"},
+	)
+
+	ReliabilityConsistencyChecksTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "cloudstorex_reliability_consistency_checks_total",
+			Help: "Total consistency checks performed.",
+		},
+		[]string{"workspace", "provider", "status"},
+	)
+
+	ReliabilityDiscrepanciesFoundTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "cloudstorex_reliability_discrepancies_found_total",
+			Help: "Total object inconsistencies found.",
+		},
+		[]string{"workspace", "provider", "type"},
+	)
+
+	ReliabilityRepairsCompletedTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "cloudstorex_reliability_repairs_completed_total",
+			Help: "Total self-healing repairs successfully completed.",
+		},
+		[]string{"workspace", "provider"},
+	)
+
+	ReliabilityChaosExperimentsTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "cloudstorex_reliability_chaos_experiments_total",
+			Help: "Total chaos engineering experiments run.",
+		},
+		[]string{"workspace", "experiment_type", "status"},
+	)
+
+	ReliabilitySLAViolationsTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "cloudstorex_reliability_sla_violations_total",
+			Help: "Total RTO or RPO SLA violations detected during drills.",
+		},
+		[]string{"workspace", "experiment_type", "sla_type"},
+	)
+
 )
 
 // RecordRuntimeMetrics samples standard Go runtime statistics into Prometheus gauges.

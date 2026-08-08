@@ -45,6 +45,12 @@ type Config struct {
 
 	EnablePprof bool   `mapstructure:"ENABLE_PPROF"`
 	PprofToken  string `mapstructure:"PPROF_TOKEN"`
+
+	// AI Configuration
+	AIDefaultProvider string `mapstructure:"AI_DEFAULT_PROVIDER"`
+	OpenAIApiKey      string `mapstructure:"OPENAI_API_KEY"`
+	AnthropicApiKey   string `mapstructure:"ANTHROPIC_API_KEY"`
+	GeminiApiKey      string `mapstructure:"GEMINI_API_KEY"`
 }
 
 // LoadConfig loads configuration using standard discovery locations and environment variables.
@@ -83,6 +89,11 @@ func LoadConfigWithFile(explicitPath string) (*Config, error) {
 	v.SetDefault("MAX_UPLOAD_SIZE_MB", 100)
 	v.SetDefault("ENABLE_PPROF", false)
 	v.SetDefault("PPROF_TOKEN", "")
+
+	v.SetDefault("AI_DEFAULT_PROVIDER", "OPENAI")
+	v.SetDefault("OPENAI_API_KEY", "")
+	v.SetDefault("ANTHROPIC_API_KEY", "")
+	v.SetDefault("GEMINI_API_KEY", "")
 
 	// 2. Discover and Read Configuration File (middle precedence)
 	if explicitPath != "" {

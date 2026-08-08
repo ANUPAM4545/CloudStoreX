@@ -1,27 +1,37 @@
-"use client";
-
-import { useEffect } from "react";
-import { useRouter } from "next/navigation";
-import { useAuthStore } from "@/store/auth";
+import { Header } from "@/components/marketing/Header";
+import { Footer } from "@/components/marketing/Footer";
+import { Hero } from "@/components/marketing/Hero";
+import { TrustedTech } from "@/components/marketing/TrustedTech";
+import { InteractiveArchitecture } from "@/components/marketing/InteractiveArchitecture";
+import { FeatureGrid } from "@/components/marketing/FeatureGrid";
+import { AIIntelligence } from "@/components/marketing/AIIntelligence";
+import { PolicyEngine } from "@/components/marketing/PolicyEngine";
+import { DashboardShowcase } from "@/components/marketing/DashboardShowcase";
+import { DeveloperExperience } from "@/components/marketing/DeveloperExperience";
+import { Performance } from "@/components/marketing/Performance";
+import { EnterpriseTable } from "@/components/marketing/EnterpriseTable";
+import { OpenSource } from "@/components/marketing/OpenSource";
+import { CTA } from "@/components/marketing/CTA";
 
 export default function Home() {
-  const router = useRouter();
-  const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
-
-  useEffect(() => {
-    if (isAuthenticated) {
-      router.replace("/dashboard/overview");
-    } else {
-      router.replace("/login");
-    }
-  }, [isAuthenticated, router]);
-
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background">
-      <div className="flex flex-col items-center gap-2 text-muted-foreground">
-        <div className="h-6 w-6 animate-spin rounded-full border-2 border-primary border-t-transparent" />
-        <span className="text-sm">Loading CloudStoreX...</span>
-      </div>
-    </div>
+    <main className="min-h-screen bg-background text-foreground flex flex-col selection:bg-primary/30 selection:text-white">
+      <Header />
+      
+      <Hero />
+      <TrustedTech />
+      <InteractiveArchitecture />
+      <FeatureGrid />
+      <AIIntelligence />
+      <PolicyEngine />
+      <DashboardShowcase />
+      <DeveloperExperience />
+      <Performance />
+      <EnterpriseTable />
+      <OpenSource />
+      <CTA />
+
+      <Footer />
+    </main>
   );
 }

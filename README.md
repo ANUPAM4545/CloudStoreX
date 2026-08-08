@@ -1,9 +1,16 @@
-# CloudStoreX
+<div align="center">
+  <h1>CloudStoreX</h1>
+  <p><strong>The Enterprise Multi-Cloud Storage Control Plane</strong></p>
+  
+  [![Go Report Card](https://goreportcard.com/badge/github.com/cloudstorex/backend)](https://goreportcard.com/report/github.com/cloudstorex/backend)
+  [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+  [![Status: Active Development](https://img.shields.io/badge/Status-Active_Development-blue.svg)](https://github.com/cloudstorex)
+
+</div>
 
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg)](https://github.com/cloudstorex/cloudstorex)
 [![Go Version](https://img.shields.io/badge/Go-1.22+-00ADD8?style=flat&logo=go)](https://golang.org)
 [![Next.js Version](https://img.shields.io/badge/Next.js-15.0+-black?style=flat&logo=next.js)](https://nextjs.org)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Release: Alpha](https://img.shields.io/badge/Release-v0.1.0--alpha-blue.svg)](https://github.com/cloudstorex/cloudstorex/releases)
 [![Architecture: Multi--Cloud Control Plane](https://img.shields.io/badge/Architecture-Multi--Cloud%20Control%20Plane-6366f1.svg)](docs/architecture.md)
 

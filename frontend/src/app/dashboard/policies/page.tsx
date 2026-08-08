@@ -5,7 +5,7 @@ import { PageHeader } from '@/components/ui/PageHeader';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { StatusBadge } from '@/components/ui/StatusBadge';
-import { Shield, GitCommitHorizontal, Activity, ArrowRight, Server, FileText } from 'lucide-react';
+import { Shield, Activity, ArrowRight, Server, FileText } from 'lucide-react';
 import { Policy, RoutingDecision, CreatePolicyRequest } from '@/features/policies/types';
 import { policyApi } from '@/features/policies/api';
 import { PolicyBuilder } from '@/features/policies/components/PolicyBuilder';

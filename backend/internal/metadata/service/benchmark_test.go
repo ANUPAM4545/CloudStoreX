@@ -54,7 +54,7 @@ func (m *benchMockMetadataRepo) DB() *gorm.DB                                   
 
 // BenchmarkMetadataService_FindBucketByName benchmarks bucket lookup latency and memory allocations.
 func BenchmarkMetadataService_FindBucketByName(b *testing.B) {
-	svc := NewMetadataService(&benchMockMetadataRepo{}, nil)
+	svc := NewMetadataService(&benchMockMetadataRepo{}, nil, nil)
 	ctx := context.Background()
 
 	b.ReportAllocs()
@@ -67,7 +67,7 @@ func BenchmarkMetadataService_FindBucketByName(b *testing.B) {
 
 // BenchmarkMetadataService_FindBucketByNameParallel benchmarks parallel reader scalability for catalog lookup.
 func BenchmarkMetadataService_FindBucketByNameParallel(b *testing.B) {
-	svc := NewMetadataService(&benchMockMetadataRepo{}, nil)
+	svc := NewMetadataService(&benchMockMetadataRepo{}, nil, nil)
 	ctx := context.Background()
 
 	b.ReportAllocs()
@@ -82,7 +82,7 @@ func BenchmarkMetadataService_FindBucketByNameParallel(b *testing.B) {
 
 // BenchmarkMetadataService_SearchObjects benchmarks metadata search evaluation.
 func BenchmarkMetadataService_SearchObjects(b *testing.B) {
-	svc := NewMetadataService(&benchMockMetadataRepo{}, nil)
+	svc := NewMetadataService(&benchMockMetadataRepo{}, nil, nil)
 	ctx := context.Background()
 
 	query := dto.SearchQuery{

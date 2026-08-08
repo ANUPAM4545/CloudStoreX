@@ -10,8 +10,11 @@ type EvaluationContext struct {
 	Bucket         string
 	ObjectKey      string
 	Size           int64
+	MimeType       string
+	StorageClass   string
 	Region         string
 	ComplianceTags []string
 	CostOptimized  bool
 	Metadata       map[string]string
+	Tags           map[string]string
 }

@@ -5,17 +5,21 @@ import (
 	"strconv"
 
 	"github.com/cloudstorex/backend/internal/policy/dto"
+	"github.com/cloudstorex/backend/internal/policy/engine"
+	"github.com/cloudstorex/backend/internal/policy/model"
 	"github.com/cloudstorex/backend/internal/policy/service"
 	"github.com/cloudstorex/backend/internal/shared/response"
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 )
 
 type Handler struct {
 	service service.PolicyService
+	engine  engine.PolicyEngine
 }
 
-func NewHandler(svc service.PolicyService) *Handler {
-	return &Handler{service: svc}
+func NewHandler(svc service.PolicyService, eng engine.PolicyEngine) *Handler {
+	return &Handler{service: svc, engine: eng}
 }
 
 func getWorkspaceID(c *gin.Context) string {
@@ -129,4 +133,47 @@ func (h *Handler) ListRoutingDecisions(c *gin.Context) {
 		"items": decisions,
 		"total": total,
 	})
+}
+
+type EvaluateRequest struct {
+	Bucket       string            `json:"bucket"`
+	ObjectKey    string            `json:"object_key"`
+	Size         int64             `json:"size"`
+	MimeType     string            `json:"mime_type"`
+	StorageClass string            `json:"storage_class"`
+	Tags         map[string]string `json:"tags"`
+	Operation    string            `json:"operation"`
+}
+
+func (h *Handler) Evaluate(c *gin.Context) {
+	var req EvaluateRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.Error(c, http.StatusBadRequest, "INVALID_REQUEST", "invalid request payload")
+		return
+	}
+	
+	wsID := getWorkspaceID(c)
+	wid, err := uuid.Parse(wsID)
+	if err != nil {
+		response.Error(c, http.StatusBadRequest, "INVALID_WORKSPACE", "invalid workspace id")
+		return
+	}
+	
+	evalCtx := &model.EvaluationContext{
+		WorkspaceID:  wid,
+		Bucket:       req.Bucket,
+		ObjectKey:    req.ObjectKey,
+		Size:         req.Size,
+		MimeType:     req.MimeType,
+		StorageClass: req.StorageClass,
+		Tags:         req.Tags,
+	}
+	
+	_, decision, err := h.engine.Resolve(c.Request.Context(), evalCtx, req.Operation)
+	if err != nil {
+		response.Error(c, http.StatusInternalServerError, "INTERNAL_ERROR", "evaluation failed")
+		return
+	}
+	
+	response.Success(c, http.StatusOK, decision)
 }

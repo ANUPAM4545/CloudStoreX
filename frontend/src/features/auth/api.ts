@@ -23,4 +23,16 @@ export const authApi = {
     const res = await apiClient.get<any, APIResponse<{ email: string }>>("/auth/me");
     return res.data || { email: "user@example.com" };
   },
+
+  async verifyMFA(token: string, code: string): Promise<void> {
+    await apiClient.post("/auth/mfa/verify", { token, code });
+  },
+
+  async resetPassword(email: string): Promise<void> {
+    await apiClient.post("/auth/reset-password", { email });
+  },
+
+  async updatePassword(token: string, password: string): Promise<void> {
+    await apiClient.post("/auth/update-password", { token, password });
+  },
 };

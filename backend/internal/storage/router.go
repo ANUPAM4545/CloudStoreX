@@ -27,6 +27,47 @@ type defaultRouter struct {
 	engine    engine.PolicyEngine
 }
 
+// providerValidatorAdapter adapts ProviderRegistry to engine.ProviderValidator
+type providerValidatorAdapter struct {
+	registry ProviderRegistry
+}
+
+// NewProviderValidator creates a new ProviderValidator for the policy engine.
+func NewProviderValidator(registry ProviderRegistry) engine.ProviderValidator {
+	return &providerValidatorAdapter{registry: registry}
+}
+
+func (a *providerValidatorAdapter) Validate(ctx context.Context, providerID string, op string) (bool, bool, error) {
+	prov, err := a.registry.Get(providerID)
+	if err != nil {
+		return false, false, err
+	}
+	
+	// Assume healthy if it exists in registry
+	healthy := true
+	
+	capable := true
+	caps := prov.Capabilities()
+	switch op {
+	case "CreateMultipartUpload", "UploadPart", "CompleteMultipartUpload", "AbortMultipartUpload":
+		capable = caps.MultipartUpload
+	case "CopyObject":
+		capable = caps.ObjectCopy
+	case "ListObjectVersions":
+		capable = caps.ObjectVersioning
+	case "GetObjectTags", "SetObjectTags":
+		capable = caps.ObjectTags
+	case "GetObjectMetadata", "SetObjectMetadata":
+		capable = caps.ObjectMetadata
+	case "GeneratePresignedUploadURL":
+		capable = caps.PresignedUploadURLs
+	case "GeneratePresignedDownloadURL":
+		capable = caps.PresignedDownloadURLs
+	}
+	
+	return healthy, capable, nil
+}
+
 // NewRouter creates a new central Storage Router.
 func NewRouter(registry ProviderRegistry, policyEngine engine.PolicyEngine) Router {
 	return &defaultRouter{
@@ -50,6 +91,23 @@ func (r *defaultRouter) resolveProvider(ctx context.Context, bucket, key string,
 			evalCtx.WorkspaceID = id
 		}
 	}
+	if val := GetContextValue(ctx, CtxKeyOrganizationID); val != "" {
+		if id, err := uuid.Parse(val); err == nil {
+			evalCtx.OrganizationID = id
+		}
+	}
+	
+	if val := GetContextValue(ctx, CtxKeyEvaluationMimeType); val != "" {
+		evalCtx.MimeType = val
+	}
+	if val := GetContextValue(ctx, CtxKeyEvaluationStorageClass); val != "" {
+		evalCtx.StorageClass = val
+	}
+	
+	// Tags passed via context directly
+	if tags, ok := ctx.Value(CtxKeyEvaluationTags).(map[string]string); ok {
+		evalCtx.Tags = tags
+	}
 
 	providerID, _, err := r.engine.Resolve(ctx, evalCtx, op)
 	if err != nil {
@@ -62,6 +120,18 @@ func (r *defaultRouter) resolveProvider(ctx context.Context, bucket, key string,
 	}
 
 	return provider, providerID, nil
+}
+
+func (r *defaultRouter) Capabilities() ProviderCapabilities {
+	return ProviderCapabilities{
+		MultipartUpload:       true,
+		ObjectCopy:            true,
+		ObjectVersioning:      true,
+		ObjectTags:            true,
+		ObjectMetadata:        true,
+		PresignedUploadURLs:   true,
+		PresignedDownloadURLs: true,
+	}
 }
 
 func (r *defaultRouter) Upload(ctx context.Context, bucket, key string, reader io.Reader, size int64, meta *ObjectMetadata) (*StorageResponse, error) {
@@ -193,17 +263,7 @@ func (r *defaultRouter) CopyObject(ctx context.Context, srcBucket, srcKey, destB
 	return res, nil
 }
 
-func (r *defaultRouter) MoveObject(ctx context.Context, srcBucket, srcKey, destBucket, destKey string) (*StorageResponse, error) {
-	prov, providerID, err := r.resolveProvider(ctx, srcBucket, srcKey, 0, "MoveObject")
-	if err != nil {
-		return nil, err
-	}
-	res, err := prov.MoveObject(ctx, srcBucket, srcKey, destBucket, destKey)
-	if err != nil {
-		return nil, NewDomainError("move_object", providerID, srcBucket, srcKey, err)
-	}
-	return res, nil
-}
+
 
 func (r *defaultRouter) GetObjectMetadata(ctx context.Context, bucket, key string) (*ObjectMetadata, error) {
 	prov, providerID, err := r.resolveProvider(ctx, bucket, key, 0, "GetObjectMetadata")

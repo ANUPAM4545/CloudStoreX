@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/cloudstorex/backend/internal/metadata/cache"
 	"github.com/cloudstorex/backend/internal/metadata/dto"
 	"github.com/cloudstorex/backend/internal/metadata/events"
 	"github.com/cloudstorex/backend/internal/metadata/model"
@@ -33,12 +34,14 @@ type MetadataService interface {
 type metadataService struct {
 	repo      repository.MetadataRepository
 	publisher events.Publisher
+	cache     cache.MetadataCache
 }
 
-func NewMetadataService(repo repository.MetadataRepository, publisher events.Publisher) MetadataService {
+func NewMetadataService(repo repository.MetadataRepository, publisher events.Publisher, cache cache.MetadataCache) MetadataService {
 	return &metadataService{
 		repo:      repo,
 		publisher: publisher,
+		cache:     cache,
 	}
 }
 

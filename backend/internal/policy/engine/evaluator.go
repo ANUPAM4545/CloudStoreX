@@ -2,60 +2,73 @@ package engine
 
 import (
 	"context"
-	"sort"
+	"encoding/json"
 
 	"github.com/cloudstorex/backend/internal/policy/model"
-	"github.com/cloudstorex/backend/internal/policy/rules"
 )
 
 // Evaluator evaluates an EvaluationContext against a set of policies to determine a target provider.
 type Evaluator interface {
-	Evaluate(ctx context.Context, evalCtx *model.EvaluationContext, policies []*model.Policy) (rules.RuleResult, *model.Policy, error)
+	Evaluate(ctx context.Context, evalCtx *model.EvaluationContext, policies []*model.Policy) (PolicyResult, *model.Policy, error)
 }
 
-type defaultEvaluator struct {
-	registry rules.Registry
+// PolicyResult holds the outcome of evaluating a policy action
+type PolicyResult struct {
+	Matched             bool
+	PrimaryProvider     string
+	FallbackProviders   []string
+	RejectIfUnsupported bool
+	Explanation         string
 }
+
+type defaultEvaluator struct{}
 
 // NewEvaluator creates a new Evaluation Engine.
-func NewEvaluator(registry rules.Registry) Evaluator {
-	return &defaultEvaluator{
-		registry: registry,
-	}
+func NewEvaluator() Evaluator {
+	return &defaultEvaluator{}
 }
 
-func (e *defaultEvaluator) Evaluate(ctx context.Context, evalCtx *model.EvaluationContext, policies []*model.Policy) (rules.RuleResult, *model.Policy, error) {
-	// Filter enabled policies
-	var activePolicies []*model.Policy
+func (e *defaultEvaluator) Evaluate(ctx context.Context, evalCtx *model.EvaluationContext, policies []*model.Policy) (PolicyResult, *model.Policy, error) {
 	for _, p := range policies {
-		if p.Enabled {
-			activePolicies = append(activePolicies, p)
-		}
-	}
-
-	// Sort by priority ASC (lower number is higher priority)
-	sort.Slice(activePolicies, func(i, j int) bool {
-		return activePolicies[i].Priority < activePolicies[j].Priority
-	})
-
-	for _, p := range activePolicies {
-		rule, err := e.registry.Get(p.RuleType)
-		if err != nil {
-			// Skip unsupported rules to prevent pipeline blocking, log it in real scenario
+		if !p.Enabled {
 			continue
 		}
 
-		result, err := rule.Evaluate(evalCtx, p.Conditions, p.Actions)
+		var rootNode model.ConditionNode
+		if len(p.Conditions) > 0 {
+			if err := json.Unmarshal(p.Conditions, &rootNode); err != nil {
+				// Malformed policy condition, skip
+				continue
+			}
+		} else {
+			// Empty condition implies match all
+			rootNode = model.ConditionNode{} 
+		}
+
+		matched, err := evaluateNode(evalCtx, &rootNode)
 		if err != nil {
-			// Rule evaluation failed, skip
+			// Evaluation failed (e.g. type mismatch), skip policy
 			continue
 		}
 
-		if result.Matched {
-			return result, p, nil
+		if matched {
+			var action model.PolicyAction
+			if len(p.Actions) > 0 {
+				if err := json.Unmarshal(p.Actions, &action); err != nil {
+					continue // Malformed action
+				}
+			}
+
+			return PolicyResult{
+				Matched:             true,
+				PrimaryProvider:     action.PrimaryProvider,
+				FallbackProviders:   action.FallbackProviders,
+				RejectIfUnsupported: action.RejectIfUnsupported,
+				Explanation:         "Policy matched based on dynamic rules.",
+			}, p, nil
 		}
 	}
 
 	// No policy matched
-	return rules.RuleResult{Matched: false}, nil, nil
+	return PolicyResult{Matched: false}, nil, nil
 }

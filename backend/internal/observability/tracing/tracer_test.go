@@ -42,8 +42,8 @@ func TestTracer_InitAndSpans(t *testing.T) {
 
 	// Test nil-safety
 	tracing.RecordError(nil, errTest)
-	assert.Empty(t, tracing.ExtractTraceID(nil))
-	assert.Empty(t, tracing.ExtractSpanID(nil))
+	assert.Empty(t, tracing.ExtractTraceID(context.TODO()))
+	assert.Empty(t, tracing.ExtractSpanID(context.TODO()))
 
 	// Test span attributes
 	childSpan.SetAttributes(
